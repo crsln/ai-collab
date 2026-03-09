@@ -537,8 +537,15 @@ class BrainstormDB:
 
     # -- Onboarding (composite) --
 
-    def get_onboarding_briefing(self, agent_name: str, session_id: str | None = None) -> dict:
-        """Build full onboarding response: identity + workflow + tools + optional session context."""
+    def get_onboarding_briefing(
+        self, agent_name: str, session_id: str | None = None,
+        round_id: str | None = None,
+    ) -> dict:
+        """Build full onboarding response: identity + workflow + tools + optional session context.
+
+        Phase-aware: when feedback items exist for the session, includes current_phase='deliberation'
+        with explicit instructions and feedback item IDs so agents know they must vote, not analyze.
+        """
         import json as _json
 
         # Agent identity
@@ -577,6 +584,10 @@ class BrainstormDB:
         session_role = None
         session_context = None
         guidelines_list = []
+        current_phase = None
+        phase_instructions = None
+        feedback_item_ids = []
+
         if session_id:
             context = self.get_context(session_id)
             session_context = context
@@ -590,6 +601,29 @@ class BrainstormDB:
             guidelines = self.list_guidelines(session_id)
             guidelines_list = [g["content"] for g in guidelines]
 
+            # Phase detection: feedback items exist → deliberation mode
+            feedback_items = self.list_feedback_items(session_id)
+            if feedback_items:
+                current_phase = "deliberation"
+                feedback_item_ids = [item["id"] for item in feedback_items]
+                round_ref = f", round_id='{round_id}'" if round_id else ""
+                phase_instructions = (
+                    "YOU ARE IN PHASE 2: DELIBERATION. "
+                    "You must review and vote on feedback items — do NOT do general analysis. "
+                    "Follow these steps EXACTLY:\n"
+                    f"1. Call bs_list_feedback(session_id='{session_id}') to see all items\n"
+                    "2. For EACH item, call bs_get_feedback(item_id=<id>) to read the full "
+                    "content and all agents' prior verdicts\n"
+                    "3. For EACH item, call bs_respond_to_feedback("
+                    f"item_id=<id>{round_ref}, agent_name='{agent_name}', "
+                    "verdict='accept' or 'reject' or 'modify', reasoning='your reasoning')\n"
+                    f"4. Call bs_save_response({round_ref}, "
+                    f"agent_name='{agent_name}', content='summary of your verdicts')\n"
+                    f"\nFeedback item IDs: {', '.join(feedback_item_ids)}"
+                )
+            else:
+                current_phase = "analysis"
+
         return {
             "your_identity": identity,
             "workflow": workflow,
@@ -597,6 +631,9 @@ class BrainstormDB:
             "session_role": session_role,
             "session_context": session_context,
             "guidelines": guidelines_list,
+            "current_phase": current_phase,
+            "phase_instructions": phase_instructions,
+            "feedback_item_ids": feedback_item_ids,
         }
 
     # -- Session briefing (context + role + guidelines) --

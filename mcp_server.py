@@ -398,8 +398,8 @@ def _build_round_prompt(
         f"You are '{agent_name}' in brainstorm session {session_id}, round {round_id}.",
         "",
         "MANDATORY FIRST STEP: Call bs_get_onboarding(agent_name='"
-        f"{agent_name}', session_id='{session_id}') to get your identity,"
-        " role, workflow instructions, and available tools.",
+        f"{agent_name}', session_id='{session_id}', round_id='{round_id}') to get your identity,"
+        " role, workflow instructions, current phase, and available tools.",
         "Do this BEFORE any other action. The onboarding response tells you"
         " exactly what to do in this round.",
     ]

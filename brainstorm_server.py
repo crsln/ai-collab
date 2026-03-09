@@ -395,21 +395,27 @@ def bs_session_history(session_id: str) -> str:
 # -- Onboarding & self-describing tools (agent-facing reads) --
 
 @mcp.tool()
-def bs_get_onboarding(agent_name: str, session_id: str | None = None) -> str:
+def bs_get_onboarding(
+    agent_name: str, session_id: str | None = None, round_id: str | None = None,
+) -> str:
     """Primary entry point for agents. Returns everything you need: your identity,
     workflow overview, phases, convergence rules, response format, tool guides,
     and session context if a session_id is provided.
+
+    Phase-aware: when feedback items exist, includes current_phase='deliberation'
+    with explicit voting instructions and feedback item IDs.
 
     Call this FIRST when starting any brainstorm work.
 
     Args:
         agent_name: Your agent name (copilot, gemini, claude).
         session_id: Optional session ID for session-specific context, role, and guidelines.
+        round_id: Optional round ID for phase-specific instructions.
 
     Returns:
         Full onboarding briefing with identity, workflow, tools, and optional session data.
     """
-    result = _db.get_onboarding_briefing(agent_name, session_id)
+    result = _db.get_onboarding_briefing(agent_name, session_id, round_id)
     return json.dumps(result, indent=2)
 
 
