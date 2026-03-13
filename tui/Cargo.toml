@@ -7,6 +7,10 @@ edition = "2021"
 name = "ai-collab-tui"
 path = "src/main.rs"
 
+[lib]
+name = "ai_collab_tui"
+path = "src/lib.rs"
+
 [dependencies]
 ratatui = "0.28"
 crossterm = "0.28"
