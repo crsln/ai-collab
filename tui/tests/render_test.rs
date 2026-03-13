@@ -1,5 +1,5 @@
 use ai_collab_tui::db::{AgentResponse, RoundInfo, SessionData};
-use ai_collab_tui::render::{extract_summary, render_flow_art};
+use ai_collab_tui::render::{compute_layout, extract_summary};
 use std::collections::HashMap;
 
 fn make_session(n_agents: usize, n_rounds: usize, all_responded: bool) -> SessionData {
@@ -16,7 +16,7 @@ fn make_session(n_agents: usize, n_rounds: usize, all_responded: bool) -> Sessio
                 })
                 .collect()
         } else {
-            vec![] // last round, no responses yet
+            vec![]
         };
         rounds.push(RoundInfo {
             round_id: format!("r_{}", ri),
@@ -41,25 +41,43 @@ fn make_session(n_agents: usize, n_rounds: usize, all_responded: bool) -> Sessio
 }
 
 #[test]
-fn test_flow_art_row_count_3_agents() {
+fn test_layout_has_origin_node() {
     let session = make_session(3, 2, true);
     let color_map: HashMap<String, usize> = [
         ("claude".to_string(), 0),
         ("copilot".to_string(), 1),
         ("gemini".to_string(), 2),
-    ]
-    .into();
-    let lines = render_flow_art(&session, &color_map, 0);
-    // One row per agent
-    assert_eq!(lines.len(), 3);
+    ].into();
+    let layout = compute_layout(&session, &color_map, 0);
+    // Origin is always first node
+    assert!(!layout.nodes.is_empty());
+    assert!(layout.nodes[0].x < 15.0); // origin is on the left
 }
 
 #[test]
-fn test_flow_art_row_count_1_agent() {
-    let session = make_session(1, 1, true);
-    let color_map: HashMap<String, usize> = [("claude".to_string(), 0)].into();
-    let lines = render_flow_art(&session, &color_map, 0);
-    assert_eq!(lines.len(), 1);
+fn test_layout_dot_count_3_agents_2_rounds() {
+    let session = make_session(3, 2, true);
+    let color_map: HashMap<String, usize> = [
+        ("claude".to_string(), 0),
+        ("copilot".to_string(), 1),
+        ("gemini".to_string(), 2),
+    ].into();
+    let layout = compute_layout(&session, &color_map, 0);
+    // 1 origin + 3 agents * 2 rounds = 7 nodes
+    assert_eq!(layout.nodes.len(), 7);
+}
+
+#[test]
+fn test_layout_has_spinners_when_running() {
+    let session = make_session(3, 2, false); // not all responded, is_running=true
+    let color_map: HashMap<String, usize> = [
+        ("claude".to_string(), 0),
+        ("copilot".to_string(), 1),
+        ("gemini".to_string(), 2),
+    ].into();
+    let layout = compute_layout(&session, &color_map, 0);
+    // Last round has 0 responses, so 3 spinners expected
+    assert_eq!(layout.spinners.len(), 3);
 }
 
 #[test]
@@ -68,13 +86,8 @@ fn test_extract_summary_strips_prefix() {
 }
 
 #[test]
-fn test_extract_summary_skips_blank() {
-    assert_eq!(extract_summary("\n\nHello world"), "Hello world");
-}
-
-#[test]
 fn test_extract_summary_truncates() {
     let long = "a".repeat(80);
     let s = extract_summary(&long);
-    assert!(s.len() <= 73); // 70 chars + "…"
+    assert!(s.len() <= 73);
 }

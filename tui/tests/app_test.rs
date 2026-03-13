@@ -44,14 +44,13 @@ fn test_focus_next_wraps() {
 }
 
 #[test]
-fn test_card_height_3_agents() {
-    use ai_collab_tui::app::card_height;
-    // 2 borders + 1 header + 1 meta + 3 flow rows = 7
-    assert_eq!(card_height(3), 7);
-}
-
-#[test]
-fn test_card_height_1_agent() {
-    use ai_collab_tui::app::card_height;
-    assert_eq!(card_height(1), 5);
+fn test_focus_prev_wraps() {
+    let mut state = dummy_state();
+    state.sessions = vec![
+        make_session("a", false, "2026-01-01T00:00:00+00:00"),
+        make_session("b", false, "2026-01-02T00:00:00+00:00"),
+    ];
+    state.focused_idx = Some(0);
+    state.focus_prev();
+    assert_eq!(state.focused_idx, Some(1));
 }
