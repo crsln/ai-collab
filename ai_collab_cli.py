@@ -640,9 +640,7 @@ def _cmd_tui(args: argparse.Namespace) -> None:
         print("Install it with: pip install ai-collab[tui]")
         sys.exit(1)
 
-    agent_names = args.agents.split(",") if args.agents else None
-    question = getattr(args, "question", None)
-    run_tui(question, agent_names=agent_names, cwd=args.cwd)
+    run_tui(hours=getattr(args, "hours", 24), limit=getattr(args, "limit", 6))
 
 
 def _cmd_dispatch(args: argparse.Namespace) -> None:
@@ -714,7 +712,19 @@ def main() -> None:
     )
     p_tui.add_argument(
         "--cwd", "-d",
-        help="Working directory for agent subprocesses",
+        help="Ignored — kept for backward compatibility",
+    )
+    p_tui.add_argument(
+        "--hours",
+        type=int,
+        default=24,
+        help="Hours of history to show (default: 24)",
+    )
+    p_tui.add_argument(
+        "--limit",
+        type=int,
+        default=6,
+        help="Max sessions to display (default: 6)",
     )
 
     # dispatch (send a question to the running TUI)
