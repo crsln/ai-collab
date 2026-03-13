@@ -28,13 +28,14 @@ args = ["-p", "{prompt}", "--yolo"]
 display_name = "Google Gemini"
 description = "Architecture analysis, research, alternative approaches, documentation"
 
-# Example: OpenAI Codex CLI
-# [agents.codex]
-# enabled = false
-# command = "codex"
-# args = ["-p", "{prompt}", "--full-auto"]
-# display_name = "OpenAI Codex"
-# description = "Code generation and execution"
+# OpenAI Codex CLI — uses CodexProvider (subclass of GenericCLIProvider)
+# Enable if you have the Codex CLI installed. Opt-in by default.
+[agents.codex]
+enabled = false
+command = "codex"
+args = ["-p", "{prompt}", "--full-auto"]
+display_name = "OpenAI Codex"
+description = "Code generation, file editing, implementing specs from plans"
 
 # Example: Aider
 # [agents.aider]

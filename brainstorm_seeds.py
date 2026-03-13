@@ -32,6 +32,11 @@ AGENT_DEFINITIONS = [
             "Cite specific file paths and line numbers in every verdict. Never make claims "
             "without evidence from the codebase. If a tool fails, skip it and move on."
         ),
+        "vision": "Correctness verified against source code",
+        "angle": "Ground truth reader",
+        "behavior": "Read code before forming opinions. Cite file:line for every claim.",
+        "tags": ["code-verification", "grep", "evidence-first"],
+        "backend_hint": "copilot",
     },
     {
         "agent_name": "gemini",
@@ -54,6 +59,11 @@ AGENT_DEFINITIONS = [
             "Read code to ground your analysis, but also consider the bigger picture. "
             "Suggest alternatives when you see a better approach. If a tool fails, skip it and move on."
         ),
+        "vision": "Architectural soundness and alignment with best practices",
+        "angle": "Big-picture thinker",
+        "behavior": "Think architecturally before diving into code. Surface alternatives.",
+        "tags": ["architecture", "research", "design-patterns"],
+        "backend_hint": "gemini",
     },
     {
         "agent_name": "claude",
@@ -74,6 +84,35 @@ AGENT_DEFINITIONS = [
             "Drive deliberation toward convergence. Synthesize final consensus that captures the "
             "best insights from all agents. Be decisive on contested items."
         ),
+        "vision": "Convergence to high-quality actionable consensus",
+        "angle": "Synthesis and arbitration",
+        "behavior": "Coordinate workflow. Extract clear feedback items. Be decisive on contested items.",
+        "tags": ["orchestrator", "synthesis", "consensus"],
+        "backend_hint": "claude",
+    },
+    {
+        "agent_name": "codex",
+        "display_name": "OpenAI Codex",
+        "capabilities": (
+            "Code generation, file editing, implementing specs from plans. "
+            "Best for: translating architecture decisions into working code."
+        ),
+        "default_role": (
+            "Focused code implementer. Read the full spec before writing any code. "
+            "Follow existing patterns. Minimize scope."
+        ),
+        "approach": (
+            "Read the implementation spec completely. Locate relevant files. "
+            "Follow existing patterns. Run tests after implementing."
+        ),
+        "vision": "Clean, working code that satisfies the specification completely and minimally",
+        "angle": "Spec-to-code translator: the plan is the truth, the code is the proof",
+        "behavior": (
+            "Read full spec before coding. Identify minimal change set. Follow conventions. "
+            "Verify by running tests. Don't refactor beyond scope."
+        ),
+        "tags": ["code-generation", "implementation", "execution"],
+        "backend_hint": "codex",
     },
 ]
 
@@ -118,6 +157,20 @@ WORKFLOW_TEMPLATES = [
                 "expected_outputs": (
                     "A verdict (accept/reject/modify) with evidence-based reasoning for every "
                     "feedback item. Cite file paths and line numbers where possible."
+                ),
+                "instructions": (
+                    "YOU ARE IN PHASE 2: DELIBERATION. "
+                    "You must review and vote on feedback items — do NOT do general analysis. "
+                    "Follow these steps EXACTLY:\n"
+                    "1. Call bs_list_feedback(session_id='{session_id}') to see all items\n"
+                    "2. For EACH item, call bs_get_feedback(item_id=<id>) to read the full "
+                    "content and all agents' prior verdicts\n"
+                    "3. For EACH item, call bs_respond_to_feedback(item_id=<id>, "
+                    "round_id='{round_id}', agent_name='{agent_name}', "
+                    "verdict='accept' or 'reject' or 'modify', reasoning='your reasoning')\n"
+                    "4. Call bs_save_response(round_id='{round_id}', "
+                    "agent_name='{agent_name}', content='summary of your verdicts')\n"
+                    "\nFeedback item IDs: {feedback_item_ids}"
                 ),
             },
             {
@@ -299,6 +352,141 @@ ROLE_TEMPLATES = [
             "patterns by name. Be concrete, not abstract."
         ),
         "tags": ["research", "gemini", "alternatives", "best-practices"],
+    },
+    {
+        "slug": "senior-software-architect",
+        "display_name": "Senior Software Architect",
+        "agent_name": None,
+        "description": "System gaps, coupling, evolution paths — architectural integrity focus.",
+        "role_text": (
+            "Senior software architect. Evaluate the system's architecture for structural integrity, "
+            "coupling, cohesion, and evolutionary fitness. Identify what needs to change to support "
+            "the system as it grows. Distinguish accidental from essential complexity."
+        ),
+        "approach": (
+            "Map dependencies before evaluating structure. Consider 6-month and 2-year evolution "
+            "trajectories. Challenge abstractions that don't pull their weight. Think in systems, "
+            "not files."
+        ),
+        "vision": "Architectural integrity: a system easy to change and aligned with its domain",
+        "angle": "Identify the gap between what the system is and what it needs to be as it grows",
+        "behavior": (
+            "Think in systems, not files. Consider 6-month and 2-year trajectories. "
+            "Challenge abstractions that don't pull their weight."
+        ),
+        "mandates": [
+            "Map dependencies before evaluating structure",
+            "Distinguish accidental from essential complexity",
+        ],
+        "tags": ["architecture", "system-design", "evolution"],
+    },
+    {
+        "slug": "tester",
+        "display_name": "Test Engineer",
+        "agent_name": None,
+        "description": "Coverage, edge cases, failure modes — test quality and completeness.",
+        "role_text": (
+            "Test engineer. Evaluate test coverage, quality, and completeness. Identify uncovered "
+            "edge cases, missing failure mode tests, and gaps in integration coverage. Verify that "
+            "tests actually test what they claim to test."
+        ),
+        "approach": (
+            "Map the test suite structure first. Check coverage for happy paths, error paths, and "
+            "edge cases. Look for tests that would pass even if the code is wrong. Verify mocks "
+            "are realistic."
+        ),
+        "vision": "A test suite that catches real bugs before production",
+        "angle": "What breaks that the tests won't catch?",
+        "behavior": (
+            "Check coverage breadth AND depth. Identify boundary conditions and failure modes. "
+            "Read the actual test code, not just coverage metrics."
+        ),
+        "mandates": [
+            "Check both happy path AND error path coverage",
+            "Identify at least one untested failure mode",
+        ],
+        "tags": ["testing", "coverage", "quality"],
+    },
+    {
+        "slug": "implementer",
+        "display_name": "Implementer",
+        "agent_name": "codex",
+        "description": "Translate plans to code — spec-faithful, pattern-following implementation.",
+        "role_text": (
+            "Implementer. Your job is to translate the specification into working code. "
+            "Read the full spec before writing anything. Follow existing code patterns exactly. "
+            "Minimize the change set. Don't refactor beyond scope."
+        ),
+        "approach": (
+            "Read the full spec. Identify which files need to change. Follow existing patterns. "
+            "Implement the minimal change. Run tests to verify. Don't add unrequested features."
+        ),
+        "vision": "Clean, working code that satisfies the specification completely and minimally",
+        "angle": "Spec-to-code translator: the plan is the truth, the code is the proof",
+        "behavior": (
+            "Read full spec before coding. Identify minimal change set. Follow conventions. "
+            "Verify by running tests. Don't refactor beyond scope."
+        ),
+        "mandates": [
+            "Read the complete spec before writing any code",
+            "Follow existing code patterns — don't introduce new conventions",
+            "Run tests after implementing",
+        ],
+        "tags": ["implementation", "codex", "spec-driven"],
+    },
+    {
+        "slug": "gap-analyst",
+        "display_name": "Gap Analyst",
+        "agent_name": None,
+        "description": "Delta between intent and implementation — find what's missing or misaligned.",
+        "role_text": (
+            "Gap analyst. Your job is to identify the delta between the stated intent and the "
+            "actual implementation. What was promised but not delivered? What was implemented "
+            "but not intended? Where does the code diverge from the spec or design?"
+        ),
+        "approach": (
+            "Compare the spec/design document against the actual code. List every discrepancy. "
+            "Distinguish gaps (missing), drift (diverged), and bloat (unintended additions). "
+            "Be precise: cite specific claims in the spec and specific code locations."
+        ),
+        "vision": "Perfect alignment between intent and implementation",
+        "angle": "What was promised that wasn't delivered? What was delivered that wasn't asked for?",
+        "behavior": (
+            "Read the spec first, then the code. Never start from code and work backwards. "
+            "Produce a gap list, not a code review."
+        ),
+        "mandates": [
+            "Read the spec/design before reading the code",
+            "Produce a named gap list with spec-citation and code-location for each item",
+        ],
+        "tags": ["gap-analysis", "spec-alignment", "requirements"],
+    },
+    {
+        "slug": "tech-lead",
+        "display_name": "Tech Lead",
+        "agent_name": None,
+        "description": "Pragmatic balance of quality and velocity — practical team-level decisions.",
+        "role_text": (
+            "Tech lead. Balance code quality, team velocity, and pragmatic delivery. "
+            "Identify what must be done now vs. what can be deferred. Make trade-off calls "
+            "that a senior engineer would respect. Consider team context, not just ideal design."
+        ),
+        "approach": (
+            "Think about impact vs. effort. Separate must-fix from nice-to-fix. Consider "
+            "what the team can realistically accomplish. Identify the highest-leverage actions. "
+            "Be opinionated — give clear recommendations, not endless options."
+        ),
+        "vision": "Pragmatic technical excellence that ships and can be maintained",
+        "angle": "What's the highest-leverage action given real-world constraints?",
+        "behavior": (
+            "Give clear prioritized recommendations. Acknowledge trade-offs but don't hide behind them. "
+            "Separate urgent (must fix now) from important (should fix soon) from deferred (tech debt to track)."
+        ),
+        "mandates": [
+            "Prioritize findings as P1/P2/P3 — don't treat everything as equal",
+            "Give a clear recommendation, not just pros and cons",
+        ],
+        "tags": ["tech-lead", "pragmatic", "priorities"],
     },
 ]
 

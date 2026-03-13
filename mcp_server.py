@@ -565,6 +565,8 @@ def bs_create_role(
     slug: str, display_name: str, description: str, role_text: str,
     agent_name: str | None = None, approach: str | None = None,
     tags: str | None = None, notes: str | None = None,
+    vision: str | None = None, angle: str | None = None,
+    behavior: str | None = None, mandates: str | None = None,
 ) -> str:
     """Create a reusable role template in the role library.
 
@@ -581,12 +583,21 @@ def bs_create_role(
         approach: Optional approach guidance (appended to role_text when applied).
         tags: Comma-separated tags for filtering (e.g. 'security,code-review').
         notes: Optional notes about when/how to use this role.
+        vision: The desired outcome this role is optimizing for.
+        angle: The unique perspective or lens this role brings.
+        behavior: How the agent should behave when in this role.
+        mandates: JSON array string of non-negotiable rules, or a single rule string.
     """
     tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
+    mandates_list = (
+        json.loads(mandates) if mandates and mandates.strip().startswith("[")
+        else ([mandates] if mandates else None)
+    )
     return json.dumps(
         _db.create_role_template(
             slug, display_name, description, role_text,
             agent_name=agent_name, approach=approach, tags=tag_list, notes=notes,
+            vision=vision, angle=angle, behavior=behavior, mandates=mandates_list,
         ),
         indent=2,
     )
@@ -609,6 +620,7 @@ def bs_list_roles(agent_name: str | None = None, tag: str | None = None) -> str:
             "description": r["description"],
             "tags": r["tags"],
             "usage_count": r["usage_count"],
+            "has_behavior_definition": bool(r.get("vision") or r.get("behavior")),
         }
         for r in roles
     ]
@@ -633,6 +645,8 @@ def bs_update_role(
     slug: str, display_name: str | None = None, description: str | None = None,
     role_text: str | None = None, approach: str | None = None,
     tags: str | None = None, notes: str | None = None,
+    vision: str | None = None, angle: str | None = None,
+    behavior: str | None = None, mandates: str | None = None,
 ) -> str:
     """Update a role template. Only provided fields are changed.
 
@@ -644,11 +658,20 @@ def bs_update_role(
         approach: New approach guidance.
         tags: New comma-separated tags (replaces existing).
         notes: New notes.
+        vision: The desired outcome this role is optimizing for.
+        angle: The unique perspective or lens this role brings.
+        behavior: How the agent should behave when in this role.
+        mandates: JSON array string of non-negotiable rules, or a single rule string.
     """
     tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else None
+    mandates_list = (
+        json.loads(mandates) if mandates and mandates.strip().startswith("[")
+        else ([mandates] if mandates else None)
+    )
     result = _db.update_role_template(
         slug, display_name=display_name, description=description,
         role_text=role_text, approach=approach, tags=tag_list, notes=notes,
+        vision=vision, angle=angle, behavior=behavior, mandates=mandates_list,
     )
     if not result:
         return f"Role template '{slug}' not found."

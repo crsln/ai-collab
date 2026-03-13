@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from config import AgentConfig, get_enabled_agents
 from .base import Provider
+from .codex import CodexProvider
 from .copilot import CopilotProvider
 from .errors import ProviderError, ProviderExecution, ProviderTimeout, ProviderUnavailable
 from .gemini import GeminiProvider
@@ -12,6 +13,7 @@ from .generic import GenericCLIProvider
 # Known providers with CLI-specific quirks
 _KNOWN_PROVIDERS: dict[str, type[GenericCLIProvider]] = {
     "copilot": CopilotProvider,
+    "codex": CodexProvider,
     "gemini": GeminiProvider,
 }
 
@@ -37,6 +39,7 @@ def get_all_providers() -> dict[str, GenericCLIProvider]:
 __all__ = [
     "Provider",
     "GenericCLIProvider",
+    "CodexProvider",
     "CopilotProvider",
     "GeminiProvider",
     "ProviderError",

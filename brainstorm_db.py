@@ -104,6 +104,7 @@ class BrainstormDB:
                 session_id TEXT NOT NULL,
                 agent_name TEXT NOT NULL,
                 role TEXT NOT NULL,
+                source_slug TEXT,
                 created_at TEXT NOT NULL,
                 FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
                 UNIQUE (session_id, agent_name)
@@ -126,6 +127,11 @@ class BrainstormDB:
                 capabilities TEXT NOT NULL,
                 default_role TEXT NOT NULL,
                 approach TEXT NOT NULL,
+                vision TEXT,
+                angle TEXT,
+                behavior TEXT,
+                tags TEXT DEFAULT '[]',
+                backend_hint TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -159,6 +165,10 @@ class BrainstormDB:
                 description TEXT NOT NULL,
                 role_text TEXT NOT NULL,
                 approach TEXT,
+                vision TEXT,
+                angle TEXT,
+                behavior TEXT,
+                mandates TEXT DEFAULT '[]',
                 tags TEXT DEFAULT '[]',
                 usage_count INTEGER DEFAULT 0,
                 last_used_at TEXT,
@@ -187,6 +197,34 @@ class BrainstormDB:
         round_cols = {r[1] for r in self._conn.execute("PRAGMA table_info(rounds)").fetchall()}
         if "question" not in round_cols:
             self._conn.execute("ALTER TABLE rounds ADD COLUMN question TEXT")
+            self._conn.commit()
+
+        rl_cols = {r[1] for r in self._conn.execute("PRAGMA table_info(role_library)").fetchall()}
+        if "vision" not in rl_cols:
+            for sql in [
+                "ALTER TABLE role_library ADD COLUMN vision TEXT",
+                "ALTER TABLE role_library ADD COLUMN angle TEXT",
+                "ALTER TABLE role_library ADD COLUMN behavior TEXT",
+                "ALTER TABLE role_library ADD COLUMN mandates TEXT DEFAULT '[]'",
+            ]:
+                self._conn.execute(sql)
+            self._conn.commit()
+
+        ad_cols = {r[1] for r in self._conn.execute("PRAGMA table_info(agent_definitions)").fetchall()}
+        if "vision" not in ad_cols:
+            for sql in [
+                "ALTER TABLE agent_definitions ADD COLUMN vision TEXT",
+                "ALTER TABLE agent_definitions ADD COLUMN angle TEXT",
+                "ALTER TABLE agent_definitions ADD COLUMN behavior TEXT",
+                "ALTER TABLE agent_definitions ADD COLUMN tags TEXT DEFAULT '[]'",
+                "ALTER TABLE agent_definitions ADD COLUMN backend_hint TEXT",
+            ]:
+                self._conn.execute(sql)
+            self._conn.commit()
+
+        ar_cols = {r[1] for r in self._conn.execute("PRAGMA table_info(agent_roles)").fetchall()}
+        if "source_slug" not in ar_cols:
+            self._conn.execute("ALTER TABLE agent_roles ADD COLUMN source_slug TEXT")
             self._conn.commit()
 
     # -- Sessions --
@@ -397,14 +435,15 @@ class BrainstormDB:
 
     # -- Agent Roles --
 
-    def set_role(self, session_id: str, agent_name: str, role: str) -> dict:
+    def set_role(self, session_id: str, agent_name: str, role: str, *, source_slug: str | None = None) -> dict:
         rid = f"role_{_uid()}"
         now = _now()
         self._conn.execute(
-            "INSERT INTO agent_roles (id, session_id, agent_name, role, created_at)"
-            " VALUES (?, ?, ?, ?, ?)"
-            " ON CONFLICT(session_id, agent_name) DO UPDATE SET role=excluded.role, created_at=excluded.created_at",
-            (rid, session_id, agent_name, role, now),
+            "INSERT INTO agent_roles (id, session_id, agent_name, role, source_slug, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?)"
+            " ON CONFLICT(session_id, agent_name) DO UPDATE SET role=excluded.role, "
+            "source_slug=excluded.source_slug, created_at=excluded.created_at",
+            (rid, session_id, agent_name, role, source_slug, now),
         )
         self._conn.commit()
         row = self._conn.execute(
@@ -455,37 +494,57 @@ class BrainstormDB:
     def upsert_agent_definition(
         self, agent_name: str, display_name: str,
         capabilities: str, default_role: str, approach: str,
+        *, vision: str | None = None, angle: str | None = None,
+        behavior: str | None = None, tags: list[str] | None = None,
+        backend_hint: str | None = None,
     ) -> dict:
+        import json as _json
         now = _now()
+        tags_json = _json.dumps(tags or [])
         existing = self.get_agent_definition(agent_name)
         if existing:
             self._conn.execute(
                 "UPDATE agent_definitions SET display_name=?, capabilities=?, "
-                "default_role=?, approach=?, updated_at=? WHERE agent_name=?",
-                (display_name, capabilities, default_role, approach, now, agent_name),
+                "default_role=?, approach=?, vision=?, angle=?, behavior=?, "
+                "tags=?, backend_hint=?, updated_at=? WHERE agent_name=?",
+                (display_name, capabilities, default_role, approach, vision, angle,
+                 behavior, tags_json, backend_hint, now, agent_name),
             )
             self._conn.commit()
             return {"id": existing["id"], "agent_name": agent_name, "updated": True}
         aid = f"ad_{_uid()}"
         self._conn.execute(
             "INSERT INTO agent_definitions (id, agent_name, display_name, capabilities, "
-            "default_role, approach, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (aid, agent_name, display_name, capabilities, default_role, approach, now, now),
+            "default_role, approach, vision, angle, behavior, tags, backend_hint, "
+            "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (aid, agent_name, display_name, capabilities, default_role, approach,
+             vision, angle, behavior, tags_json, backend_hint, now, now),
         )
         self._conn.commit()
         return {"id": aid, "agent_name": agent_name, "created": True}
 
     def get_agent_definition(self, agent_name: str) -> dict | None:
+        import json as _json
         row = self._conn.execute(
             "SELECT * FROM agent_definitions WHERE agent_name = ?", (agent_name,)
         ).fetchone()
-        return dict(row) if row else None
+        if not row:
+            return None
+        d = dict(row)
+        d["tags"] = _json.loads(d.get("tags") or "[]")
+        return d
 
     def list_agent_definitions(self) -> list[dict]:
+        import json as _json
         rows = self._conn.execute(
             "SELECT * FROM agent_definitions ORDER BY agent_name"
         ).fetchall()
-        return [dict(r) for r in rows]
+        result = []
+        for r in rows:
+            d = dict(r)
+            d["tags"] = _json.loads(d.get("tags") or "[]")
+            result.append(d)
+        return result
 
     # -- Workflow Templates (global) --
 
@@ -568,17 +627,22 @@ class BrainstormDB:
         self, slug: str, display_name: str, description: str,
         role_text: str, agent_name: str | None = None,
         approach: str | None = None, tags: list[str] | None = None,
-        notes: str | None = None,
+        notes: str | None = None, *, vision: str | None = None,
+        angle: str | None = None, behavior: str | None = None,
+        mandates: list[str] | None = None,
     ) -> dict:
         import json as _json
         rid = f"rl_{_uid()}"
         now = _now()
         tags_json = _json.dumps(tags or [])
+        mandates_json = _json.dumps(mandates or [])
         self._conn.execute(
             "INSERT INTO role_library (id, slug, display_name, agent_name, description, "
-            "role_text, approach, tags, notes, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (rid, slug, display_name, agent_name, description, role_text, approach, tags_json, notes, now, now),
+            "role_text, approach, vision, angle, behavior, mandates, tags, notes, "
+            "created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (rid, slug, display_name, agent_name, description, role_text, approach,
+             vision, angle, behavior, mandates_json, tags_json, notes, now, now),
         )
         self._conn.commit()
         return {"id": rid, "slug": slug, "display_name": display_name, "created": True}
@@ -593,6 +657,7 @@ class BrainstormDB:
             return None
         d = dict(row)
         d["tags"] = _json.loads(d.get("tags") or "[]")
+        d["mandates"] = _json.loads(d.get("mandates") or "[]")
         return d
 
     def list_role_templates(
@@ -613,6 +678,7 @@ class BrainstormDB:
         for r in rows:
             d = dict(r)
             d["tags"] = _json.loads(d.get("tags") or "[]")
+            d["mandates"] = _json.loads(d.get("mandates") or "[]")
             if tag and tag not in d["tags"]:
                 continue
             results.append(d)
@@ -623,6 +689,8 @@ class BrainstormDB:
         display_name: str | None = None, description: str | None = None,
         role_text: str | None = None, approach: str | None = None,
         tags: list[str] | None = None, notes: str | None = None,
+        vision: str | None = None, angle: str | None = None,
+        behavior: str | None = None, mandates: list[str] | None = None,
     ) -> dict | None:
         import json as _json
         existing = self.get_role_template(slug_or_id)
@@ -643,6 +711,14 @@ class BrainstormDB:
             updates.append("tags = ?"); params.append(_json.dumps(tags))
         if notes is not None:
             updates.append("notes = ?"); params.append(notes)
+        if vision is not None:
+            updates.append("vision = ?"); params.append(vision)
+        if angle is not None:
+            updates.append("angle = ?"); params.append(angle)
+        if behavior is not None:
+            updates.append("behavior = ?"); params.append(behavior)
+        if mandates is not None:
+            updates.append("mandates = ?"); params.append(_json.dumps(mandates))
         if not updates:
             return existing
         updates.append("updated_at = ?"); params.append(now)
@@ -672,15 +748,25 @@ class BrainstormDB:
             "UPDATE role_library SET usage_count = usage_count + 1, last_used_at = ? WHERE id = ?",
             (now, template["id"]),
         )
-        # Set session role (approach appended if present)
+        # Compose role text from all behavioral fields
         role_text = template["role_text"]
         if template.get("approach"):
             role_text += f"\n\nApproach: {template['approach']}"
-        role_result = self.set_role(session_id, agent_name, role_text)
+        if template.get("behavior"):
+            role_text += f"\n\nBehavior: {template['behavior']}"
+        if template.get("vision"):
+            role_text += f"\n\nVision: {template['vision']}"
+        if template.get("angle"):
+            role_text += f"\n\nAngle: {template['angle']}"
+        mandates = template.get("mandates") or []
+        if mandates:
+            role_text += "\n\nMandates (non-negotiable):\n" + "\n".join(f"- {m}" for m in mandates)
+        role_result = self.set_role(session_id, agent_name, role_text, source_slug=template["slug"])
         self._conn.commit()
         return {
             "template_id": template["id"],
             "template_slug": template["slug"],
+            "source_slug": template["slug"],
             "agent_name": agent_name,
             "session_id": session_id,
             "role_id": role_result["id"],
@@ -710,6 +796,10 @@ class BrainstormDB:
                 "capabilities": defn["capabilities"],
                 "default_role": defn["default_role"],
                 "approach": defn["approach"],
+                "vision": defn.get("vision"),
+                "angle": defn.get("angle"),
+                "behavior": defn.get("behavior"),
+                "tags": defn.get("tags") or [],
             }
 
         # Workflow
@@ -735,6 +825,7 @@ class BrainstormDB:
         # Session-scoped data (if session_id provided)
         session_role = None
         session_context = None
+        session_role_detail = None
         guidelines_list = []
         current_phase = None
         phase_instructions = None
@@ -744,9 +835,18 @@ class BrainstormDB:
             context = self.get_context(session_id)
             session_context = context
 
-            role = self.get_role(session_id, agent_name)
-            if role:
-                session_role = role["role"]
+            role_row = self.get_role(session_id, agent_name)
+            if role_row:
+                session_role = role_row["role"]
+                if role_row.get("source_slug"):
+                    tmpl = self.get_role_template(role_row["source_slug"])
+                    if tmpl:
+                        session_role_detail = {
+                            "vision": tmpl.get("vision"),
+                            "angle": tmpl.get("angle"),
+                            "behavior": tmpl.get("behavior"),
+                            "mandates": tmpl.get("mandates") or [],
+                        }
             elif defn:
                 session_role = defn["default_role"]
 
@@ -759,20 +859,33 @@ class BrainstormDB:
                 current_phase = "deliberation"
                 feedback_item_ids = [item["id"] for item in feedback_items]
                 round_ref = f", round_id='{round_id}'" if round_id else ""
-                phase_instructions = (
-                    "YOU ARE IN PHASE 2: DELIBERATION. "
-                    "You must review and vote on feedback items — do NOT do general analysis. "
-                    "Follow these steps EXACTLY:\n"
-                    f"1. Call bs_list_feedback(session_id='{session_id}') to see all items\n"
-                    "2. For EACH item, call bs_get_feedback(item_id=<id>) to read the full "
-                    "content and all agents' prior verdicts\n"
-                    "3. For EACH item, call bs_respond_to_feedback("
-                    f"item_id=<id>{round_ref}, agent_name='{agent_name}', "
-                    "verdict='accept' or 'reject' or 'modify', reasoning='your reasoning')\n"
-                    f"4. Call bs_save_response({round_ref}, "
-                    f"agent_name='{agent_name}', content='summary of your verdicts')\n"
-                    f"\nFeedback item IDs: {', '.join(feedback_item_ids)}"
+                # DB-driven phase instructions (from workflow template)
+                phases = _json.loads(wf["phases"]) if wf else []
+                current_phase_def = next(
+                    (p for p in phases if "deliberation" in p.get("name", "").lower()), None
                 )
+                if current_phase_def and current_phase_def.get("instructions"):
+                    phase_instructions = current_phase_def["instructions"].format(
+                        session_id=session_id,
+                        round_id=round_id or "",
+                        agent_name=agent_name,
+                        feedback_item_ids=", ".join(feedback_item_ids),
+                    )
+                else:
+                    phase_instructions = (
+                        "YOU ARE IN PHASE 2: DELIBERATION. "
+                        "You must review and vote on feedback items — do NOT do general analysis. "
+                        "Follow these steps EXACTLY:\n"
+                        f"1. Call bs_list_feedback(session_id='{session_id}') to see all items\n"
+                        "2. For EACH item, call bs_get_feedback(item_id=<id>) to read the full "
+                        "content and all agents' prior verdicts\n"
+                        "3. For EACH item, call bs_respond_to_feedback("
+                        f"item_id=<id>{round_ref}, agent_name='{agent_name}', "
+                        "verdict='accept' or 'reject' or 'modify', reasoning='your reasoning')\n"
+                        f"4. Call bs_save_response({round_ref}, "
+                        f"agent_name='{agent_name}', content='summary of your verdicts')\n"
+                        f"\nFeedback item IDs: {', '.join(feedback_item_ids)}"
+                    )
             else:
                 current_phase = "analysis"
 
@@ -793,6 +906,7 @@ class BrainstormDB:
             "tools": tool_list,
             "task": task,
             "session_role": session_role,
+            "session_role_detail": session_role_detail,
             "session_context": session_context,
             "guidelines": guidelines_list,
             "current_phase": current_phase,

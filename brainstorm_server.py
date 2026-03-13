@@ -557,6 +557,7 @@ def bs_list_roles(agent_name: str | None = None, tag: str | None = None) -> str:
             "description": r["description"],
             "tags": r["tags"],
             "usage_count": r["usage_count"],
+            "has_behavior_definition": bool(r.get("vision") or r.get("behavior")),
         }
         for r in roles
     ]

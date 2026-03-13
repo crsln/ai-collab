@@ -83,6 +83,13 @@ _BUILTIN_AGENTS: dict[str, dict] = {
         "display_name": "Google Gemini",
         "description": "Architecture analysis, research, alternative approaches, documentation",
     },
+    "codex": {
+        "command": "codex",
+        "args": ["-p", "{prompt}", "--full-auto"],
+        "enabled": False,  # opt-in: most users won't have codex installed
+        "display_name": "OpenAI Codex",
+        "description": "Code generation, file editing, implementing specs from plans",
+    },
 }
 
 
