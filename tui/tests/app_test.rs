@@ -46,8 +46,8 @@ fn test_focus_next_wraps() {
 #[test]
 fn test_card_height_3_agents() {
     use ai_collab_tui::app::card_height;
-    // Fixed: 2 borders + 1 header + 1 meta + 1 dot chain = 5
-    assert_eq!(card_height(3), 5);
+    // 2 borders + 1 header + 1 meta + 3 flow rows = 7
+    assert_eq!(card_height(3), 7);
 }
 
 #[test]

@@ -50,8 +50,8 @@ fn test_flow_art_row_count_3_agents() {
     ]
     .into();
     let lines = render_flow_art(&session, &color_map, 0);
-    // Always 1 row — single dot chain regardless of agent count
-    assert_eq!(lines.len(), 1);
+    // One row per agent
+    assert_eq!(lines.len(), 3);
 }
 
 #[test]

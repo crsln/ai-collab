@@ -44,13 +44,6 @@ fn colored(s: &str, color: ratatui::style::Color) -> Span<'static> {
     Span::styled(s.to_string(), Style::default().fg(color))
 }
 
-/// Render a single-line dot chain: one ● per response record, colored by agent.
-/// Chain grows left-to-right as records land in the DB.
-///
-/// Examples:
-///   ◉ ─ ●(orange) ─ ●(purple) ─ ●(green) ─ ◆ summary
-///   ◉ ─ ● ─ ● ─ ⠋ ─ ⠋  (running, 2 agents pending)
-///   ◉  ⠋ waiting…         (no rounds yet)
 pub fn render_flow_art(
     session: &SessionData,
     color_map: &HashMap<String, usize>,
@@ -59,69 +52,98 @@ pub fn render_flow_art(
     let sp = braille_frame(frame);
     let rounds = &session.rounds;
 
-    let mut spans: Vec<Span<'static>> = vec![colored("◉", CYAN)];
-
-    if rounds.is_empty() {
-        if session.is_running {
-            spans.push(dim(&format!("  {} waiting…", sp)));
+    let all_agents: Vec<String> = {
+        let mut set: BTreeSet<String> = BTreeSet::new();
+        for (name, _) in color_map {
+            set.insert(name.clone());
         }
-        return vec![Line::from(spans)];
-    }
-
-    // One dot per response record, in round order
-    for (ri, round) in rounds.iter().enumerate() {
-        let is_last = ri == rounds.len() - 1;
-
-        // Responded agents (have content)
-        for resp in &round.responses {
-            if resp.content.is_some() {
-                let color_idx = color_map.get(&resp.agent_name).copied().unwrap_or(0);
-                let color = AGENT_COLORS[color_idx % AGENT_COLORS.len()];
-                spans.push(dim(" ─ "));
-                spans.push(colored("●", color));
+        for r in rounds {
+            for resp in &r.responses {
+                set.insert(resp.agent_name.clone());
             }
         }
+        set.into_iter().collect()
+    };
 
-        // Pending agents on the last round (show spinner)
-        if session.is_running && is_last {
-            let responded: HashSet<&str> = round
-                .responses
+    let n = all_agents.len();
+    let m = rounds.len();
+
+    if n == 0 || m == 0 {
+        return vec![Line::from(vec![
+            colored("◉", CYAN),
+            dim(&format!("  {} waiting…", sp)),
+        ])];
+    }
+
+    let responded_sets: Vec<HashSet<&str>> = rounds
+        .iter()
+        .map(|r| {
+            r.responses
                 .iter()
-                .filter(|r| r.content.is_some())
-                .map(|r| r.agent_name.as_str())
-                .collect();
+                .filter(|resp| resp.content.is_some())
+                .map(|resp| resp.agent_name.as_str())
+                .collect()
+        })
+        .collect();
 
-            // All known agents (from color_map + past responses)
-            let mut all_known: BTreeSet<String> = color_map.keys().cloned().collect();
-            for r in rounds {
-                for resp in &r.responses {
-                    all_known.insert(resp.agent_name.clone());
-                }
+    let has_consensus = session.consensus_content.is_some();
+    let mut lines = vec![];
+
+    for (ai, agent) in all_agents.iter().enumerate() {
+        let color_idx = color_map.get(agent).copied().unwrap_or(ai);
+        let color = AGENT_COLORS[color_idx % AGENT_COLORS.len()];
+        let mut spans: Vec<Span<'static>> = vec![];
+
+        // Left branch prefix
+        if n == 1 {
+            spans.push(colored("◉", CYAN));
+            spans.push(dim("─── "));
+        } else if ai == 0 {
+            spans.push(colored("◉", CYAN));
+            spans.push(dim("─┬─ "));
+        } else if ai == n - 1 {
+            spans.push(dim("  └─ "));
+        } else {
+            spans.push(dim("  ├─ "));
+        }
+
+        // Dots per round
+        for (ri, responded) in responded_sets.iter().enumerate() {
+            if responded.contains(agent.as_str()) {
+                spans.push(colored("●", color));
+            } else if session.is_running && ri == m - 1 {
+                spans.push(Span::styled(
+                    sp.to_string(),
+                    Style::default().fg(color),
+                ));
+            } else {
+                spans.push(colored("○", color));
             }
-
-            for agent in &all_known {
-                if !responded.contains(agent.as_str()) {
-                    let color_idx = color_map.get(agent.as_str()).copied().unwrap_or(0);
-                    let color = AGENT_COLORS[color_idx % AGENT_COLORS.len()];
-                    spans.push(dim(" ─ "));
-                    spans.push(Span::styled(sp.to_string(), Style::default().fg(color)));
-                }
+            if ri < m - 1 {
+                spans.push(dim(" ─ "));
             }
         }
+
+        // Consensus / running tail — row 0 only
+        if ai == 0 {
+            if has_consensus {
+                let short =
+                    extract_summary(session.consensus_content.as_deref().unwrap_or(""));
+                let short = if short.len() > 40 {
+                    format!("{}…", &short[..40])
+                } else {
+                    short
+                };
+                spans.push(dim(" ─ "));
+                spans.push(colored("◆", MINT));
+                spans.push(dim(&format!(" {}", short)));
+            } else if session.is_running {
+                spans.push(dim(&format!(" ─ {}", sp)));
+            }
+        }
+
+        lines.push(Line::from(spans));
     }
 
-    // Consensus node
-    if let Some(content) = &session.consensus_content {
-        let short = extract_summary(content);
-        let short = if short.len() > 40 {
-            format!("{}…", &short[..40])
-        } else {
-            short
-        };
-        spans.push(dim(" ─ "));
-        spans.push(colored("◆", MINT));
-        spans.push(dim(&format!(" {}", short)));
-    }
-
-    vec![Line::from(spans)]
+    lines
 }
