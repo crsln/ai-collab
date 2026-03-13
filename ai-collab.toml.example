@@ -1,0 +1,54 @@
+# ai-collab agent configuration
+# Copy to ai-collab.toml and customize
+# Only enable agents whose CLI tools you have installed
+
+[settings]
+db_path = ".data/brainstorm.db"
+default_timeout = 900  # 15 minutes
+
+# Each [agents.NAME] section defines an AI CLI agent.
+# Required fields: command, args
+# Optional fields: model, timeout, enabled, display_name, description
+
+[agents.copilot]
+enabled = true
+command = "copilot"
+args = ["-p", "{prompt}", "--allow-all"]
+# model = ""  # uses CLI default
+# timeout = 900
+display_name = "GitHub Copilot"
+description = "Code analysis, shell commands, git operations, GitHub CLI"
+
+[agents.gemini]
+enabled = true
+command = "gemini"
+args = ["-p", "{prompt}", "--yolo"]
+# model = ""
+# timeout = 900
+display_name = "Google Gemini"
+description = "Architecture analysis, research, alternative approaches, documentation"
+
+# Example: OpenAI Codex CLI
+# [agents.codex]
+# enabled = false
+# command = "codex"
+# args = ["-p", "{prompt}", "--full-auto"]
+# display_name = "OpenAI Codex"
+# description = "Code generation and execution"
+
+# Example: Aider
+# [agents.aider]
+# enabled = false
+# command = "aider"
+# args = ["--message", "{prompt}"]
+# display_name = "Aider"
+# description = "AI pair programming"
+
+# Example: Custom CLI agent
+# [agents.my_agent]
+# enabled = false
+# command = "my-ai-tool"
+# args = ["--prompt", "{prompt}"]
+# timeout = 300
+# display_name = "My Custom Agent"
+# description = "Custom AI tool integration"

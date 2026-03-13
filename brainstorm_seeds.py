@@ -2,9 +2,14 @@
 
 Run via: python brainstorm_cli.py seed-defaults
 All upserts — safe to re-run.
+
+These are sensible defaults for common agents. Users can override
+by creating their own agent definitions via bs_set_agent_definition()
+or by modifying this file before seeding.
 """
 
 # -- Agent Definitions --
+# These match the built-in agents in config.py. Add more as needed.
 
 AGENT_DEFINITIONS = [
     {
@@ -13,7 +18,7 @@ AGENT_DEFINITIONS = [
         "capabilities": (
             "Strong at code analysis, shell/git operations, grep-based verification, "
             "GitHub CLI integration, and reading/navigating large codebases. "
-            "Has access to MCP tools (brainstorm + atlas) and can execute shell commands. "
+            "Has access to MCP tools (brainstorm) and can execute shell commands. "
             "Best used for concrete code-level tasks: verifying claims against source, "
             "finding bugs, checking implementations, running tests."
         ),
@@ -34,7 +39,7 @@ AGENT_DEFINITIONS = [
         "capabilities": (
             "Strong at code generation, architectural analysis, research, alternative "
             "approaches, documentation review, and broad technical knowledge. "
-            "Has access to MCP tools (brainstorm + atlas) and can search the web. "
+            "Has access to MCP tools (brainstorm) and can search the web. "
             "Best used for design-level analysis: evaluating architecture, suggesting "
             "alternatives, identifying patterns and anti-patterns."
         ),
@@ -78,12 +83,12 @@ WORKFLOW_TEMPLATES = [
     {
         "name": "brainstorm_3phase",
         "overview": (
-            "You are participating in a structured multi-AI brainstorm. Three agents "
-            "(Claude, Copilot, Gemini) collaborate through a shared SQLite database. "
-            "Each agent has its own MCP server instance for reading/writing brainstorm records. "
-            "The process has 3 phases: independent analysis, deliberation with verdicts, "
-            "and final consolidation. Work independently — read DB records, analyze code, "
-            "and save your findings via MCP tools."
+            "You are participating in a structured multi-AI brainstorm. Multiple agents "
+            "collaborate through a shared SQLite database. Each agent has its own MCP server "
+            "instance for reading/writing brainstorm records. The process has 3 phases: "
+            "independent analysis, deliberation with verdicts, and final consolidation. "
+            "Work independently — read DB records, analyze code, and save your findings "
+            "via MCP tools."
         ),
         "phases": [
             {

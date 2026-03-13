@@ -20,6 +20,9 @@ class BrainstormDB:
     def __init__(self, db_path: str | Path):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        # check_same_thread=False is safe here: each MCP server process gets its
+        # own BrainstormDB instance, and asyncio is single-threaded within a process.
+        # Cross-process concurrency is handled by SQLite WAL mode.
         self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")

@@ -102,7 +102,7 @@ class ClaudeProvider(Provider):
         self._jsonl_path = self._discover_session_file()
         self._seek_to_end()
 
-    async def read_response(self, timeout: float | None = None) -> str:
+    async def read_response(self, timeout: float | None = None, cwd: str | None = None) -> str:
         """Poll JSONL for Claude's response until idle or timeout."""
         timeout = timeout or CLAUDE_RESPONSE_TIMEOUT
         start = time.monotonic()

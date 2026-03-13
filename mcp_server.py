@@ -1,4 +1,11 @@
-"""MCP server exposing AI collaboration and brainstorming tools for Claude Code."""
+"""MCP server exposing AI collaboration and brainstorming tools for Claude Code.
+
+Provides:
+- ask_agent / list_agents / ask_agents: Generic delegation to any configured AI CLI
+- bs_*: Brainstorm session management tools (3-phase workflow)
+
+Agents are configured in ai-collab.toml. See ai-collab.toml.example for format.
+"""
 
 import asyncio
 import json
@@ -14,6 +21,8 @@ from pathlib import Path
 from mcp.server.fastmcp import Context, FastMCP
 
 from brainstorm_db import BrainstormDB
+from config import get_config, get_enabled_agents, AgentConfig
+from providers import get_provider
 from providers.errors import (
     ProviderExecution,
     ProviderTimeout,
@@ -23,9 +32,10 @@ from providers.errors import (
 log = logging.getLogger("ai-collab")
 mcp = FastMCP("ai-collab")
 
+_cfg = get_config()
 _DB_PATH = Path(os.environ.get(
     "BRAINSTORM_DB",
-    str(Path(__file__).parent / ".data" / "brainstorm.db"),
+    str(_cfg.db_path),
 ))
 _db = BrainstormDB(_DB_PATH)
 
@@ -35,19 +45,6 @@ _RESPONSES_DIR = Path(os.environ.get(
     "AI_COLLAB_RESPONSES_DIR",
     str(Path(__file__).parent / ".brainstorm"),
 ))
-_DEFAULT_TIMEOUT = 900.0  # 15 min — agents with tool access need time
-
-
-def _find_cmd(name: str) -> str:
-    """Find a CLI executable, preferring .cmd shims on Windows."""
-    if sys.platform == "win32":
-        cmd = shutil.which(f"{name}.cmd") or shutil.which(name)
-        if cmd:
-            return cmd
-    found = shutil.which(name)
-    if found:
-        return found
-    raise ProviderUnavailable(name, f"executable '{name}' not found in PATH")
 
 
 def _save_response(agent: str, question: str, response: str) -> Path:
@@ -68,155 +65,135 @@ def _save_response(agent: str, question: str, response: str) -> Path:
     return filepath
 
 
-def _clean_output(output: str) -> str:
-    """Strip ANSI codes and CLI footers from output."""
-    output = _ANSI_RE.sub("", output)
-    lines = output.strip().split("\n")
-    content_lines = []
-    for line in lines:
-        if line.strip().startswith("Total usage est:"):
-            break
-        content_lines.append(line)
-    return "\n".join(content_lines).strip()
-
-
 def _format_error(provider: str, error_type: str, message: str, retryable: bool = False) -> str:
     """Format a structured error string for LLM consumption."""
     return f"[ERROR][provider={provider}][type={error_type}][retryable={str(retryable).lower()}] {message}"
 
 
-async def _run_cli(
-    cmd_name: str,
+async def _run_agent(
+    agent_name: str,
     question: str,
     *,
-    model: str | None = None,
     cwd: str | None = None,
-    extra_args: list[str] | None = None,
-    timeout: float = _DEFAULT_TIMEOUT,
+    timeout: float | None = None,
 ) -> str:
-    """Run a CLI tool and return cleaned output. Uses -p for short prompts, stdin for long ones."""
+    """Run a configured agent CLI and return cleaned output."""
+    agents = get_enabled_agents()
+    if agent_name not in agents:
+        available = ", ".join(agents.keys()) or "none"
+        return _format_error(
+            agent_name, "not_configured",
+            f"Agent '{agent_name}' is not configured or not enabled. Available: {available}",
+        )
+
+    agent_config = agents[agent_name]
+    provider = get_provider(agent_config)
+
     try:
-        cmd = _find_cmd(cmd_name)
+        provider._find_cmd()
     except ProviderUnavailable:
-        return _format_error(cmd_name, "unavailable", f"executable '{cmd_name}' not found in PATH")
-
-    args = [cmd]
-    if model:
-        args.extend(["--model", model])
-    if extra_args:
-        args.extend(extra_args)
-    # Pipe long prompts via stdin to avoid Windows command line limit (8191 chars)
-    stdin_input = None
-    if sys.platform == "win32" and len(question) > 7000:
-        stdin_input = question.encode("utf-8")
-    else:
-        args.extend(["-p", question])
-
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            *args,
-            stdin=asyncio.subprocess.PIPE if stdin_input is not None else asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=cwd,
+        return _format_error(
+            agent_name, "unavailable",
+            f"executable '{agent_config.command}' not found in PATH",
         )
-    except FileNotFoundError:
-        return _format_error(cmd_name, "unavailable", f"executable '{cmd}' not found")
-    except OSError as e:
-        return _format_error(cmd_name, "execution", f"failed to start: {e}")
 
+    await provider.send(question)
     try:
-        stdout, stderr = await asyncio.wait_for(
-            proc.communicate(input=stdin_input), timeout=timeout
-        )
-    except asyncio.TimeoutError:
-        proc.kill()
-        await proc.wait()
-        log.warning("%s timed out after %ss", cmd_name, timeout)
-        return _format_error(cmd_name, "timeout", f"did not respond within {timeout}s", retryable=True)
-
-    if proc.returncode != 0:
-        err = stderr.decode("utf-8", errors="replace").strip()
-        log.warning("%s exited with code %d: %s", cmd_name, proc.returncode, err)
-        return _format_error(cmd_name, "execution", f"exited with code {proc.returncode}: {err}")
-
-    output = stdout.decode("utf-8", errors="replace")
-    response = _clean_output(output)
+        response = await provider.read_response(timeout=timeout or agent_config.timeout, cwd=cwd)
+    except ProviderTimeout:
+        t = timeout or agent_config.timeout
+        return _format_error(agent_name, "timeout", f"did not respond within {t}s", retryable=True)
+    except ProviderUnavailable as e:
+        return _format_error(agent_name, "unavailable", str(e))
 
     if _SAVE_RESPONSES:
-        _save_response(cmd_name, question, response)
+        _save_response(agent_name, question, response)
 
     return response
 
 
-@mcp.tool()
-async def ask_copilot(question: str, cwd: str | None = None) -> str:
-    """Ask GitHub Copilot CLI a question.
+# ── Generic delegation tools ────────────────────────────────────────────
 
-    Best for: shell commands, git operations, GitHub CLI usage, quick code snippets.
+
+@mcp.tool()
+async def ask_agent(agent_name: str, question: str, cwd: str | None = None) -> str:
+    """Ask a specific AI agent a question.
+
+    Dispatches the question to the named agent's CLI tool and returns the response.
+    Use list_agents() to see available agents and their capabilities.
 
     Args:
-        question: The question or prompt to send to Copilot.
+        agent_name: The agent to ask (e.g. 'copilot', 'gemini', 'codex').
+        question: The question or prompt to send.
         cwd: Working directory for the CLI (so it can read project files).
 
     Returns:
-        Copilot's response text.
+        The agent's response text.
     """
-    return await _run_cli(
-        "copilot", question, model="gpt-5.3-codex", cwd=cwd,
-        extra_args=["--allow-all-tools"],
-    )
+    return await _run_agent(agent_name, question, cwd=cwd)
 
 
 @mcp.tool()
-async def ask_gemini(question: str, cwd: str | None = None) -> str:
-    """Ask Google Gemini CLI a question.
-
-    Best for: code generation, research, alternative approaches, documentation lookups.
-
-    Args:
-        question: The question or prompt to send to Gemini.
-        cwd: Working directory for the CLI (so it can read project files).
+def list_agents() -> str:
+    """List all configured and enabled AI agents with their capabilities.
 
     Returns:
-        Gemini's response text.
+        JSON list of agents with name, display_name, description, and command.
     """
-    return await _run_cli(
-        "gemini", question, model="gemini-3.1-pro-preview", cwd=cwd,
-        extra_args=["--yolo"],
-    )
+    agents = get_enabled_agents()
+    result = []
+    for name, cfg in agents.items():
+        result.append({
+            "name": name,
+            "display_name": cfg.display_name,
+            "description": cfg.description,
+            "command": cfg.command,
+            "enabled": cfg.enabled,
+        })
+    return json.dumps(result, indent=2)
 
 
 @mcp.tool()
-async def ask_both(question: str, cwd: str | None = None) -> str:
-    """Ask both Copilot and Gemini the same question in parallel.
+async def ask_agents(
+    question: str,
+    agents: str | None = None,
+    cwd: str | None = None,
+) -> str:
+    """Ask multiple AI agents the same question in parallel.
 
-    Runs both CLI tools concurrently and returns both responses.
+    Runs all specified (or all enabled) agents concurrently and returns
+    all responses.
 
     Args:
-        question: The question or prompt to send to both agents.
-        cwd: Working directory for the CLIs (so they can read project files).
+        question: The question or prompt to send to all agents.
+        agents: Comma-separated agent names. If omitted, asks all enabled agents.
+        cwd: Working directory for the CLIs.
 
     Returns:
-        Combined responses from both agents.
+        Combined responses from all agents, separated by headers.
     """
-    copilot_task = _run_cli(
-        "copilot", question, model="gpt-5.3-codex", cwd=cwd,
-        extra_args=["--allow-all-tools"],
+    enabled = get_enabled_agents()
+    if agents:
+        agent_list = [a.strip() for a in agents.split(",") if a.strip()]
+    else:
+        agent_list = list(enabled.keys())
+
+    tasks = {
+        name: _run_agent(name, question, cwd=cwd)
+        for name in agent_list
+    }
+
+    results = await asyncio.gather(
+        *tasks.values(), return_exceptions=True
     )
-    gemini_task = _run_cli(
-        "gemini", question, model="gemini-3.1-pro-preview", cwd=cwd,
-        extra_args=["--yolo"],
-    )
-    copilot_resp, gemini_resp = await asyncio.gather(
-        copilot_task, gemini_task, return_exceptions=True
-    )
+
     parts = []
-    for name, resp in [("Copilot", copilot_resp), ("Gemini", gemini_resp)]:
-        if isinstance(resp, Exception):
-            parts.append(f"## {name}\n\n{_format_error(name.lower(), 'exception', str(resp))}")
+    for name, result in zip(tasks.keys(), results):
+        if isinstance(result, Exception):
+            parts.append(f"## {name}\n\n{_format_error(name, 'exception', str(result))}")
         else:
-            parts.append(f"## {name}\n\n{resp}")
+            parts.append(f"## {name}\n\n{result}")
+
     return "\n\n---\n\n".join(parts)
 
 
@@ -302,7 +279,7 @@ def bs_save_response(round_id: str, agent_name: str, content: str) -> str:
 
     Args:
         round_id: The round this response belongs to.
-        agent_name: Which agent is responding (e.g. 'claude', 'copilot', 'gemini').
+        agent_name: Which agent is responding.
         content: The full response text.
     """
     return json.dumps(_db.save_response(round_id, agent_name, content), indent=2)
@@ -375,108 +352,22 @@ def _build_round_prompt(
 ) -> str:
     """Build a context-rich prompt for an agent in a brainstorm round.
 
-    Structure: identity + onboarding first, then task, then context.
     Agents MUST call bs_get_onboarding() to self-discover their role,
-    workflow, and tool guides. Without this, agents (especially Gemini)
-    do ad-hoc analysis instead of following the brainstorm protocol.
-
-    Codebase context is inlined (small, set once per session).
-    Prior round responses are NOT inlined — agents read them from the DB via CLI
-    to avoid command-line length limits and unbounded prompt growth.
+    workflow, and tool guides.
     """
     session = _db.get_session(session_id)
     if not session:
         return question
 
-    # Detect Phase 2: feedback items exist → deliberation mode
-    feedback_items = _db.list_feedback_items(session_id)
-    is_deliberation = len(feedback_items) > 0
-
-    # Lead with identity and mandatory onboarding — this ensures agents
-    # know WHO they are and HOW to participate before seeing the task.
     parts = [
         f"You are '{agent_name}' in brainstorm session {session_id}, round {round_id}.",
         "",
         "MANDATORY FIRST STEP: Call bs_get_onboarding(agent_name='"
-        f"{agent_name}', session_id='{session_id}', round_id='{round_id}') to get your identity,"
-        " role, workflow instructions, current phase, and available tools.",
-        "Do this BEFORE any other action. The onboarding response tells you"
-        " exactly what to do in this round.",
+        f"{agent_name}', session_id='{session_id}', round_id='{round_id}') to get your"
+        " identity, role, workflow, current phase, and tools. Do this BEFORE anything else.",
+        "",
+        question,
     ]
-
-    if is_deliberation:
-        # Phase 2: explicit deliberation instructions
-        item_ids = [item["id"] for item in feedback_items]
-        parts.append("")
-        parts.append("=" * 60)
-        parts.append("PHASE 2: DELIBERATION — You must review and vote on feedback items.")
-        parts.append("=" * 60)
-        parts.append("")
-        parts.append("After calling bs_get_onboarding, follow these steps EXACTLY:")
-        parts.append(
-            f"1. Call bs_list_feedback(session_id='{session_id}') to see all items"
-        )
-        parts.append(
-            "2. For EACH item, call bs_get_feedback(item_id=<id>) to read the full"
-            " description including all agents' prior positions and verdicts"
-        )
-        parts.append(
-            "3. For EACH item, call bs_respond_to_feedback("
-            f"item_id=<id>, round_id='{round_id}', agent_name='{agent_name}',"
-            " verdict='accept' or 'reject' or 'modify', reasoning='your reasoning')"
-        )
-        parts.append(
-            f"4. Call bs_save_response(round_id='{round_id}',"
-            f" agent_name='{agent_name}', content='your summary')"
-        )
-        parts.append("")
-        parts.append(f"Feedback item IDs to review: {', '.join(item_ids)}")
-        parts.append("")
-
-    # The actual task question
-    parts.append("")
-    parts.append("YOUR TASK:")
-    parts.append(question)
-
-    # Instructions: use tools, be specific
-    parts.append(
-        "\nIMPORTANT: Use your brainstorm MCP tools (bs_get_onboarding,"
-        " bs_list_feedback, bs_get_feedback, bs_respond_to_feedback,"
-        " bs_save_response) to interact with the brainstorm session."
-        " Also use file-reading tools to verify claims against source code."
-        " Reference exact files and line numbers."
-    )
-
-    # Background context
-    parts.append(f"\n---\nProject: {session.get('project', 'N/A')} | Topic: {session['topic']}")
-
-    # Inline codebase context (set once per session, manageable size)
-    ctx = _db.get_context(session_id)
-    if ctx:
-        parts.append(f"\nBackground:\n{ctx}")
-
-    # Prior rounds — metadata only; agents fetch full responses from DB via CLI
-    prior_rounds = _db.list_rounds(session_id)
-    prior_meta = []
-    for rnd in prior_rounds:
-        if rnd["id"] == round_id:
-            break
-        responses = _db.get_round_responses(rnd["id"])
-        agent_names_list = [r["agent_name"] for r in responses]
-        if agent_names_list:
-            prior_meta.append(
-                f"  - Round {rnd['round_number']} ({rnd['id']}): "
-                f"{rnd.get('objective', 'N/A')} — responses from: {', '.join(agent_names_list)}"
-            )
-
-    if prior_meta:
-        cli_path = str(Path(__file__).parent / "brainstorm_cli.py")
-        parts.append(
-            "\nPrior rounds have been completed. BEFORE responding, read the full"
-            " responses by running this command:"
-            f'\n  python "{cli_path}" session-history --session-id {session_id}'
-            "\n\nRound summary:\n" + "\n".join(prior_meta)
-        )
 
     return "\n".join(parts)
 
@@ -487,25 +378,28 @@ async def bs_run_round(
     objective: str,
     question: str,
     cwd: str | None = None,
-    agents: str = "copilot,gemini",
+    agents: str | None = None,
     ctx: Context | None = None,
 ) -> str:
     """Run a full brainstorm round: create round, delegate to agents, auto-save all responses.
-
-    Reports progress via MCP notifications so the caller can see which agent is running.
 
     Args:
         session_id: The brainstorm session ID.
         objective: What this round should focus on.
         question: The question to ask all agents.
-        cwd: Working directory for agent CLIs (for codebase access in round 1).
-        agents: Comma-separated agent names to call (default: "copilot,gemini").
+        cwd: Working directory for agent CLIs.
+        agents: Comma-separated agent names (default: all enabled agents).
 
     Returns:
         All agent responses with round metadata.
     """
-    agent_list = [a.strip() for a in agents.split(",") if a.strip()]
-    total_steps = len(agent_list) + 1  # +1 for round creation
+    enabled = get_enabled_agents()
+    if agents:
+        agent_list = [a.strip() for a in agents.split(",") if a.strip()]
+    else:
+        agent_list = list(enabled.keys())
+
+    total_steps = len(agent_list) + 1
 
     # 1. Create the round
     round_info = _db.create_round(session_id, objective)
@@ -516,28 +410,12 @@ async def bs_run_round(
         await ctx.info(f"Round {round_num} created. Dispatching to {len(agent_list)} agents...")
 
     # 2. Build per-agent prompts and dispatch in parallel
-    agent_config = {
-        "copilot": {
-            "cmd": "copilot",
-            "model": "gpt-5.3-codex",
-            "extra_args": ["--allow-all-tools"],
-        },
-        "gemini": {
-            "cmd": "gemini",
-            "model": "gemini-3.1-pro-preview",
-            "extra_args": ["--yolo"],
-        },
-    }
-
     tasks = {}
     for agent_name in agent_list:
         prompt = _build_round_prompt(session_id, round_id, agent_name, question)
-        cfg = agent_config.get(agent_name, {"cmd": agent_name, "model": None, "extra_args": []})
-        tasks[agent_name] = _run_cli(
-            cfg["cmd"], prompt, model=cfg["model"], cwd=cwd, extra_args=cfg["extra_args"],
-        )
+        tasks[agent_name] = _run_agent(agent_name, prompt, cwd=cwd)
 
-    # Run agents in parallel, but report progress as each completes
+    # Run agents in parallel, report progress as each completes
     pending = {name: asyncio.ensure_future(coro) for name, coro in tasks.items()}
     results = {}
     completed = 0
@@ -546,7 +424,6 @@ async def bs_run_round(
             pending.values(), return_when=asyncio.FIRST_COMPLETED,
         )
         for task in done:
-            # Find which agent this task belongs to
             agent_name = next(n for n, t in pending.items() if t is task)
             del pending[agent_name]
             completed += 1
@@ -569,10 +446,8 @@ async def bs_run_round(
 
         existing = _db.get_response(round_id, agent_name)
         if existing:
-            # Agent saved its own response via brainstorm tools — keep it
             output_parts.append(f"## {agent_name} (self-saved)\n\n{existing['content']}")
         else:
-            # Agent didn't self-save — save the CLI output as their response
             _db.save_response(round_id, agent_name, content)
             output_parts.append(f"## {agent_name}\n\n{content}")
 
@@ -668,12 +543,9 @@ def bs_update_feedback_status(item_id: str, status: str) -> str:
 def bs_set_role(session_id: str, agent_name: str, role: str) -> str:
     """Set an agent's role definition for a brainstorm session.
 
-    The role tells the agent what their job is. Agents read this from the DB
-    before participating in deliberation rounds.
-
     Args:
         session_id: The brainstorm session.
-        agent_name: The agent (copilot, gemini, claude).
+        agent_name: The agent name.
         role: The role description / instructions for this agent.
     """
     return json.dumps(_db.set_role(session_id, agent_name, role), indent=2)

@@ -272,7 +272,10 @@ def bs_respond_to_feedback(
     Returns:
         Confirmation with response ID.
     """
-    result = _db.save_feedback_response(item_id, round_id, agent_name, verdict, reasoning)
+    valid_verdicts = ("accept", "reject", "modify")
+    if verdict.lower() not in valid_verdicts:
+        return f"Invalid verdict '{verdict}'. Must be one of: {', '.join(valid_verdicts)}"
+    result = _db.save_feedback_response(item_id, round_id, agent_name, verdict.lower(), reasoning)
     return json.dumps(result, indent=2)
 
 

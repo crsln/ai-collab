@@ -16,7 +16,7 @@ class Provider(ABC):
         """Send a message/prompt to the provider's terminal pane."""
 
     @abstractmethod
-    async def read_response(self, timeout: float = 60) -> str:
+    async def read_response(self, timeout: float = 60, cwd: str | None = None) -> str:
         """Read the provider's response. Blocks until complete or timeout."""
 
     @abstractmethod

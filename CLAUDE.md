@@ -1,99 +1,106 @@
-# Multi-AI Collaboration
+# ai-collab
 
-MCP server for delegating questions to GitHub Copilot and Google Gemini,
-plus structured brainstorming sessions backed by SQLite.
+MCP server for multi-AI collaboration. Delegate questions to any configured AI CLI agent
+and run structured brainstorming sessions backed by SQLite.
+
+## Setup
+
+```bash
+# Install
+pip install -e .
+
+# Interactive setup — detects installed CLIs, generates config
+ai-collab init
+
+# Or manually: copy and edit the config template
+cp ai-collab.toml.example ai-collab.toml
+```
 
 ## Architecture
 
 ```
 Claude Code (orchestrator)
-  ├── mcp_server.py — MCP tools for quick delegation (ask_copilot, ask_gemini, ask_both)
-  ├── brainstorm_server.py — MCP server for Copilot/Gemini (they run their own instances)
+  ├── mcp_server.py — MCP tools: ask_agent, list_agents, ask_agents, bs_* (brainstorm)
+  ├── brainstorm_server.py — MCP server for agent instances (feedback/session tools)
   ├── brainstorm_db.py — SQLite DB logic (.data/brainstorm.db)
-  ├── brainstorm_cli.py — CLI for Claude to read/write DB directly
-  └── atlas (cc-memory-ollama) — shared knowledge graph (all 3 agents have access)
+  ├── brainstorm_cli.py — CLI for direct DB access
+  ├── config.py — TOML config loading + agent registry
+  └── providers/ — CLI adapters (GenericCLIProvider + specialized subclasses)
 ```
+
+## Configuration
+
+Agents are defined in `ai-collab.toml`:
+
+```toml
+[agents.copilot]
+command = "copilot"
+args = ["-p", "{prompt}", "--allow-all"]
+display_name = "GitHub Copilot"
+
+[agents.gemini]
+command = "gemini"
+args = ["-p", "{prompt}", "--yolo"]
+display_name = "Google Gemini"
+```
+
+Add any CLI-based AI tool as an agent. See `ai-collab.toml.example` for more examples.
 
 ## Delegation Tools
 
-- `ask_copilot(question)` — runs GitHub Copilot CLI (quick questions only)
-- `ask_gemini(question)` — runs Google Gemini CLI (quick questions only)
-- `ask_both(question)` — runs both in parallel (quick questions only)
+- `ask_agent(agent_name, question, cwd?)` — ask a specific agent (runs in given cwd)
+- `ask_agents(question, cwd?)` — ask all enabled agents in parallel
+- `list_agents()` — show configured agents and capabilities
 
 **IMPORTANT**: For brainstorming, do NOT use these MCP tools — they drop connections on long calls.
-Use the Agent tool to dispatch CLI commands instead.
+Use the Agent tool to dispatch CLI commands instead, or use `bs_run_round`.
+
+### Agent Dispatch & cwd
+
+The `cwd` parameter is passed through to the subprocess so agents run in the correct project
+directory. This is critical for brainstorming — without it, agents analyze whichever directory
+the MCP server process happens to be in, not the target project.
 
 ## Brainstorming (use `/multi-ai-brainstorm` skill for full workflow)
 
-### Agent Dispatch
-
-Agents are dispatched via **Claude Code Agent tool subagents**, NOT via mcp__ai-collab MCP tools:
-
-```
-Agent(name="copilot-task", prompt="Run: copilot --allow-all-tools -p '...'", mode="bypassPermissions")
-Agent(name="gemini-task", prompt="Run: gemini --yolo -p '...'", mode="bypassPermissions")
-```
-
-Launch both in the same message for parallel execution.
-
 ### 3-Phase Process
 
-1. **Phase 1 — Independent Analysis**: Each agent analyzes independently (parallel via Agent tool)
-2. **Phase 2 — Deliberation**: Agents read feedback records, save verdicts via MCP tools (accept/reject/modify). Multiple rounds until convergence. Max 5 rounds, then 2-1 majority wins.
+1. **Phase 1 — Independent Analysis**: Each agent analyzes independently (parallel)
+2. **Phase 2 — Deliberation**: Agents review feedback records, save verdicts via MCP tools
 3. **Phase 3 — Consolidation**: Claude synthesizes final consensus
 
 ### Key tools
 
-| Tool | Purpose | Notes |
-|------|---------|-------|
-| `bs_new_session(topic, project?)` | Start session | |
-| `bs_set_context(session_id, context)` | Attach codebase context | |
-| `bs_new_round(session_id, objective)` | Create round | |
-| `bs_create_feedback(...)` | Create feedback items | After Phase 1 |
-| `bs_list_feedback(session_id)` | List items | Agents use via MCP |
-| `bs_get_feedback(item_id)` | Read item + verdicts | Agents use via MCP |
-| `bs_respond_to_feedback(...)` | Save verdict | Agents save independently |
-| `bs_update_feedback_status(item_id, status)` | Mark converged | Claude only |
-| `bs_save_consensus(session_id, content)` | Final document | |
-| `bs_complete_session(session_id)` | Close session | |
-| `bs_get_onboarding(agent_name, session_id?)` | Full agent onboarding | Primary entry point for agents |
-| `bs_get_briefing(session_id, agent_name)` | Session briefing | Falls back to default_role |
-| `bs_get_workflow(name?)` | Read workflow template | |
-| `bs_list_tool_guides(phase?)` | List tool guides | |
-| `bs_set_agent_definition(...)` | Create/update agent def | Admin |
-| `bs_set_workflow_template(...)` | Create/update workflow | Admin |
-| `bs_set_tool_guide(...)` | Create/update tool guide | Admin |
+| Tool | Purpose |
+|------|---------|
+| `bs_new_session(topic, project?)` | Start session |
+| `bs_set_context(session_id, context)` | Attach codebase context |
+| `bs_run_round(session_id, objective, question, cwd?)` | Run full round with all agents |
+| `bs_create_feedback(...)` | Create feedback items (after Phase 1) |
+| `bs_respond_to_feedback(...)` | Save verdict |
+| `bs_save_consensus(session_id, content)` | Final document |
+| `bs_get_onboarding(agent_name, session_id?)` | Agent onboarding entry point |
 
 ### Self-Describing DB
 
-The brainstorm DB is self-describing. Agent definitions, workflow templates, and tool guides are stored in global tables. Seed with:
+Agent definitions, workflow templates, and tool guides are stored in the DB.
+Agents call `bs_get_onboarding(agent_name)` to discover everything they need.
 
-```bash
-python brainstorm_cli.py seed-defaults
-```
-
-Agents call `bs_get_onboarding(agent_name)` to discover everything they need. Dispatch prompts can be minimal — just session/round IDs and "call bs_get_onboarding('copilot') first."
+Seed defaults: `python brainstorm_cli.py seed-defaults`
 
 ### Agent MCP Configuration
 
-Both Copilot and Gemini have these MCP servers configured:
-- **brainstorm** → `python E:/GitHub/ai-collab/brainstorm_server.py` (feedback tools)
-- **atlas** → `atlas.exe` (persistent knowledge graph)
+Each agent needs the brainstorm MCP server configured. Example for Gemini:
 
-Copilot config: `~/.copilot/mcp-config.json`
-Gemini config: `.gemini/settings.json` (project-level)
-
-### CLI (for Claude's direct DB access)
-
-```bash
-python E:/GitHub/ai-collab/brainstorm_cli.py <command> [args]
+```json
+{
+  "mcpServers": {
+    "brainstorm": {
+      "command": "python",
+      "args": ["<path-to>/brainstorm_server.py"]
+    }
+  }
+}
 ```
 
-Commands: `list-sessions`, `session-history`, `get-feedback`, `respond-feedback`, `save-consensus`
-
-## When to Delegate
-
-**ask_copilot**: shell commands, git, GitHub CLI, quick snippets
-**ask_gemini**: code generation, research, alternative approaches, docs
-**Handle yourself**: architecture decisions, complex reasoning, synthesis
-**Brainstorm**: use `/multi-ai-brainstorm` for structured multi-agent deliberation
+Run `ai-collab init` to auto-generate these config snippets.
