@@ -346,6 +346,96 @@ def bs_session_history(session_id: str) -> str:
     return json.dumps(_db.get_session_history(session_id), indent=2)
 
 
+@mcp.tool()
+def bs_get_briefing(session_id: str, agent_name: str) -> str:
+    """Get session-specific briefing: context, your role, and guidelines.
+
+    Falls back to default_role from agent_definitions if no session role is set.
+
+    Args:
+        session_id: The session.
+        agent_name: Your agent name (copilot, gemini, claude).
+    """
+    return json.dumps(_db.get_agent_briefing(session_id, agent_name), indent=2)
+
+
+@mcp.tool()
+def bs_get_onboarding(
+    agent_name: str, session_id: str | None = None, round_id: str | None = None,
+) -> str:
+    """Primary entry point for agents. Returns everything needed: identity, workflow,
+    phases, convergence rules, response format, tool guides, and session context.
+
+    Phase-aware: when feedback items exist, includes deliberation instructions.
+    Call this FIRST when starting any brainstorm work.
+
+    Args:
+        agent_name: Your agent name (copilot, gemini, claude).
+        session_id: Optional — for session-specific context, role, and guidelines.
+        round_id: Optional — for phase-specific instructions.
+    """
+    return json.dumps(_db.get_onboarding_briefing(agent_name, session_id, round_id), indent=2)
+
+
+@mcp.tool()
+def bs_get_workflow(name: str = "brainstorm_3phase") -> str:
+    """Read the workflow template: phases, convergence rules, response format.
+
+    Args:
+        name: Workflow name (default: brainstorm_3phase).
+    """
+    wf = _db.get_workflow_template(name)
+    if not wf:
+        return f"Workflow '{name}' not found. Run 'seed-defaults' to populate."
+    wf["phases"] = json.loads(wf["phases"])
+    return json.dumps(wf, indent=2)
+
+
+@mcp.tool()
+def bs_get_tool_guide(tool_name: str) -> str:
+    """Read the usage guide for a specific brainstorm tool.
+
+    Args:
+        tool_name: The tool name (e.g. 'bs_list_feedback').
+    """
+    guide = _db.get_tool_guide(tool_name)
+    if not guide:
+        return f"No guide found for tool '{tool_name}'."
+    return json.dumps(guide, indent=2)
+
+
+@mcp.tool()
+def bs_list_tool_guides(phase: str | None = None) -> str:
+    """List all tool guides, optionally filtered by workflow phase.
+
+    Args:
+        phase: Filter by phase (setup, phase1, phase2, phase3, any). None for all.
+    """
+    return json.dumps(_db.list_tool_guides(phase), indent=2)
+
+
+@mcp.tool()
+def bs_add_guideline(session_id: str, guideline: str) -> str:
+    """Add a must-do guideline to a session (e.g. 'Always cite file:line for claims').
+
+    Args:
+        session_id: The session.
+        guideline: The guideline text.
+    """
+    _db.add_guideline(session_id, guideline)
+    return "Guideline added."
+
+
+@mcp.tool()
+def bs_list_guidelines(session_id: str) -> str:
+    """List all guidelines attached to a session.
+
+    Args:
+        session_id: The session.
+    """
+    return json.dumps(_db.list_guidelines(session_id), indent=2)
+
+
 def _build_round_prompt(
     session_id: str,
     round_id: str,
@@ -625,6 +715,27 @@ def bs_list_roles(agent_name: str | None = None, tag: str | None = None) -> str:
         for r in roles
     ]
     return json.dumps(summary, indent=2)
+
+
+@mcp.tool()
+def bs_suggest_roles(
+    topic: str,
+    agents: str | None = None,
+    top_n: int = 6,
+) -> str:
+    """Suggest role templates appropriate for a brainstorm topic.
+
+    Args:
+        topic: The brainstorm topic/question (same string passed to bs_new_session).
+        agents: Comma-separated agent names for per-agent suggestions (e.g. "copilot,gemini").
+        top_n: Number of top roles to return (default: 6).
+
+    Returns JSON with top_roles (ranked by topic match) and assignments (per-agent suggestions).
+    Apply suggestions with bs_apply_role(session_id, agent_name, slug).
+    """
+    agent_list = [a.strip() for a in agents.split(",") if a.strip()] if agents else []
+    result = _db.suggest_roles(topic, agent_list, top_n=top_n)
+    return json.dumps(result, indent=2)
 
 
 @mcp.tool()

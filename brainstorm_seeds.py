@@ -387,9 +387,9 @@ ROLE_TEMPLATES = [
         "tags": ["critical-thinking", "risk", "contrarian"],
     },
     {
-        "slug": "copilot-code-verifier",
-        "display_name": "Code Verifier (Copilot)",
-        "agent_name": "copilot",
+        "slug": "code-verifier",
+        "display_name": "Code Verifier",
+        "agent_name": None,
         "description": "Copilot-specific: verify claims by reading code, grep for evidence.",
         "role_text": (
             "Code verifier. Your strength is reading code and running grep/find. For every "
@@ -412,12 +412,12 @@ ROLE_TEMPLATES = [
             "Every claim must cite a file and line number",
             "If you cannot verify a claim, say so explicitly",
         ],
-        "tags": ["verification", "copilot", "evidence"],
+        "tags": ["verification", "evidence"],
     },
     {
-        "slug": "gemini-research-analyst",
-        "display_name": "Research Analyst (Gemini)",
-        "agent_name": "gemini",
+        "slug": "research-analyst",
+        "display_name": "Research Analyst",
+        "agent_name": None,
         "description": "Gemini-specific: research alternatives, compare with industry patterns.",
         "role_text": (
             "Research analyst. Leverage your broad knowledge to compare the proposal against "
@@ -441,7 +441,7 @@ ROLE_TEMPLATES = [
             "Use web search to verify currency of advice — patterns evolve",
             "Flag when a recommendation is based on reasoning alone vs. verified external sources",
         ],
-        "tags": ["research", "gemini", "alternatives", "best-practices"],
+        "tags": ["research", "alternatives", "best-practices"],
     },
     {
         "slug": "documentation-reviewer",
@@ -531,7 +531,7 @@ ROLE_TEMPLATES = [
     {
         "slug": "implementer",
         "display_name": "Implementer",
-        "agent_name": "codex",
+        "agent_name": None,
         "description": "Translate plans to code — spec-faithful, pattern-following implementation.",
         "role_text": (
             "Implementer. Your job is to translate the specification into working code. "
@@ -553,7 +553,7 @@ ROLE_TEMPLATES = [
             "Follow existing code patterns — don't introduce new conventions",
             "Run tests after implementing",
         ],
-        "tags": ["implementation", "codex", "spec-driven"],
+        "tags": ["implementation", "spec-driven"],
     },
     {
         "slug": "gap-analyst",

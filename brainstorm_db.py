@@ -5,6 +5,8 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+_UNSET = object()  # Sentinel for "parameter not passed" (distinct from None)
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -684,6 +686,161 @@ class BrainstormDB:
             results.append(d)
         return results
 
+    def suggest_roles(self, topic: str, agent_names: list[str], top_n: int = 6) -> dict:
+        """Score role templates against a topic and suggest per-agent assignments.
+
+        Args:
+            topic: The brainstorm topic/question.
+            agent_names: List of agent names to generate per-agent suggestions for.
+            top_n: Number of top roles to return.
+
+        Returns:
+            Dict with 'topic', 'top_roles' (ranked list), and 'assignments' (per-agent suggestions).
+        """
+        import json as _json
+        import re
+
+        _STOP_WORDS = {
+            "the", "and", "for", "with", "are", "this", "that", "from", "have",
+            "its", "our", "you", "all", "can", "not", "but", "any", "how",
+            "what", "when", "who", "will", "would", "should", "could", "use",
+            "used", "into", "each", "then", "also", "via", "per",
+        }
+
+        def _tokenize(text: str) -> set[str]:
+            tokens = re.split(r'[\s\W]+', text.lower())
+            return {t for t in tokens if len(t) >= 3 and t not in _STOP_WORDS}
+
+        topic_tokens = _tokenize(topic)
+
+        # Score all roles against topic
+        roles = self.list_role_templates()
+        scored_roles = []
+        for role in roles:
+            tag_tokens: set[str] = set()
+            for t in role.get("tags") or []:
+                tag_tokens.update(_tokenize(t))
+
+            first_sentence = (role.get("role_text") or "").split(".")[0]
+            corpus_tokens = _tokenize(" ".join([
+                role.get("description") or "",
+                role.get("angle") or "",
+                " ".join(role.get("tags") or []),
+                first_sentence,
+            ]))
+
+            if not topic_tokens:
+                score = 0.0
+                match_tokens: set[str] = set()
+            else:
+                matched = topic_tokens & corpus_tokens
+                tag_matches = topic_tokens & tag_tokens
+                score = (len(matched) + len(tag_matches) * 0.5) / len(topic_tokens)
+                match_tokens = matched | tag_matches
+
+            scored_roles.append({
+                "slug": role["slug"],
+                "display_name": role["display_name"],
+                "score": round(score, 3),
+                "description": role["description"],
+                "tags": role.get("tags") or [],
+                "usage_count": role.get("usage_count") or 0,
+                "match_reason": ", ".join(sorted(match_tokens)) if match_tokens else "general (no topic match)",
+                "_role_obj": role,  # internal, stripped before return
+            })
+
+        # Sort: score desc, then usage_count desc
+        scored_roles.sort(key=lambda r: (-r["score"], -r["usage_count"]))
+
+        # Zero-match fallback: sort by usage_count
+        if all(r["score"] == 0.0 for r in scored_roles):
+            scored_roles.sort(key=lambda r: -r["usage_count"])
+            for r in scored_roles:
+                r["match_reason"] = "general (no topic match)"
+
+        top_roles = [
+            {k: v for k, v in r.items() if k != "_role_obj"}
+            for r in scored_roles[:top_n]
+        ]
+
+        # Per-agent assignment
+        assignments: dict = {}
+        assigned_slugs: dict[str, str] = {}  # slug -> agent already assigned it
+
+        for agent_name in agent_names:
+            defn = self.get_agent_definition(agent_name)
+            if defn:
+                agent_corpus_tokens = _tokenize(" ".join([
+                    defn.get("capabilities") or "",
+                    defn.get("angle") or "",
+                    " ".join(defn.get("tags") or []),
+                ]))
+            else:
+                agent_corpus_tokens = set()
+
+            best_slug: str | None = None
+            best_display: str | None = None
+            best_combined = -1.0
+            best_t_score = 0.0
+            best_c_score = 0.0
+
+            for entry in scored_roles:
+                slug = entry["slug"]
+                t_score = entry["score"]
+                role_obj = entry["_role_obj"]
+
+                # Capability overlap with agent
+                if agent_corpus_tokens:
+                    role_corpus = _tokenize(" ".join([
+                        role_obj.get("description") or "",
+                        role_obj.get("angle") or "",
+                        " ".join(role_obj.get("tags") or []),
+                    ]))
+                    c_score = len(agent_corpus_tokens & role_corpus) / max(len(agent_corpus_tokens), 1)
+                else:
+                    c_score = 0.0
+
+                diversity_penalty = 0.2 if slug in assigned_slugs else 0.0
+                combined = t_score + c_score - diversity_penalty
+
+                if combined > best_combined:
+                    best_combined = combined
+                    best_slug = slug
+                    best_display = entry["display_name"]
+                    best_t_score = t_score
+                    best_c_score = c_score
+
+            if best_slug:
+                assigned_slugs[best_slug] = agent_name
+                reason_parts = []
+                if best_t_score > 0:
+                    reason_parts.append(f"Topic match ({int(best_t_score * 100)}%)")
+                if best_c_score > 0:
+                    angle = (defn.get("angle") or "") if defn else ""
+                    if angle:
+                        reason_parts.append(f"capability alignment ({angle[:40].rstrip()})")
+                    else:
+                        reason_parts.append(f"capability overlap ({int(best_c_score * 100)}%)")
+                if not reason_parts:
+                    reason_parts.append("best available match")
+                assignments[agent_name] = {
+                    "suggested_slug": best_slug,
+                    "suggested_display_name": best_display,
+                    "reason": " + ".join(reason_parts),
+                }
+            else:
+                assignments[agent_name] = {
+                    "suggested_slug": None,
+                    "suggested_display_name": None,
+                    "reason": "No role templates available",
+                }
+
+        return {
+            "topic": topic,
+            "top_roles": top_roles,
+            "assignments": assignments,
+        }
+
     def update_role_template(
         self, slug_or_id: str, *,
         display_name: str | None = None, description: str | None = None,
@@ -691,6 +848,7 @@ class BrainstormDB:
         tags: list[str] | None = None, notes: str | None = None,
         vision: str | None = None, angle: str | None = None,
         behavior: str | None = None, mandates: list[str] | None = None,
+        agent_name=_UNSET, new_slug: str | None = None,
     ) -> dict | None:
         import json as _json
         existing = self.get_role_template(slug_or_id)
@@ -719,6 +877,10 @@ class BrainstormDB:
             updates.append("behavior = ?"); params.append(behavior)
         if mandates is not None:
             updates.append("mandates = ?"); params.append(_json.dumps(mandates))
+        if agent_name is not _UNSET:
+            updates.append("agent_name = ?"); params.append(agent_name)
+        if new_slug is not None:
+            updates.append("slug = ?"); params.append(new_slug)
         if not updates:
             return existing
         updates.append("updated_at = ?"); params.append(now)

@@ -156,7 +156,7 @@ def main():
 
         elif args.command == "seed-defaults":
             from brainstorm_seeds import AGENT_DEFINITIONS, WORKFLOW_TEMPLATES, TOOL_GUIDES, ROLE_TEMPLATES
-            counts = {"agents": 0, "workflows": 0, "tools": 0, "roles": 0, "roles_updated": 0}
+            counts = {"agents": 0, "workflows": 0, "tools": 0, "roles": 0, "roles_updated": 0, "roles_renamed": 0}
             for defn in AGENT_DEFINITIONS:
                 db.upsert_agent_definition(**defn)
                 counts["agents"] += 1
@@ -172,6 +172,15 @@ def main():
             for guide in TOOL_GUIDES:
                 db.upsert_tool_guide(**guide)
                 counts["tools"] += 1
+            # Slug renames: rename old slugs to new slugs when old exists but new doesn't
+            SLUG_RENAMES = {
+                "copilot-code-verifier": "code-verifier",
+                "gemini-research-analyst": "research-analyst",
+            }
+            for old_slug, new_slug in SLUG_RENAMES.items():
+                if db.get_role_template(old_slug) and not db.get_role_template(new_slug):
+                    db.update_role_template(old_slug, new_slug=new_slug)
+                    counts["roles_renamed"] += 1
             for role in ROLE_TEMPLATES:
                 existing = db.get_role_template(role["slug"])
                 if not existing:
@@ -181,7 +190,7 @@ def main():
                     update_kwargs = {
                         k: role[k] for k in (
                             "vision", "angle", "behavior", "mandates",
-                            "display_name", "description",
+                            "display_name", "description", "agent_name", "tags",
                         ) if k in role
                     }
                     if update_kwargs:

@@ -1,18 +1,17 @@
 """Real-time DB-backed TUI monitor for ai-collab brainstorm sessions.
 
-Polls the SQLite brainstorm.db directly — works with any number of
-simultaneous Claude Code instances using the multi-ai-brainstorm skill.
-Shows one compact session card per active/recent session, auto-refreshing
-every 2 seconds.
+Each session card shows a horizontal neural-network style flow:
 
-Previous IPC layer (queue.jsonl dispatch) is preserved for backward
-compatibility — scripts calling dispatch_to_tui() / get_tui_result()
-continue to work, but the TUI itself no longer depends on the queue.
+    ● question  ──┬── ● agent1  summary…  ──┐
+                  ├── ⠋ agent2  thinking…  ──┤── ◆ consensus
+                  └── ● agent3  summary…  ──┘
+
+Animation (0.5s tick) shows braille spinners on waiting agents.
 
 Usage:
-    ai-collab tui                   Watch for brainstorm sessions (live)
-    ai-collab tui --hours 48        Show sessions from last 48 hours
-    ai-collab tui --limit 8         Show up to 8 sessions (default 6)
+    ai-collab tui
+    ai-collab tui --hours 48
+    ai-collab tui --limit 8
 """
 
 from __future__ import annotations
@@ -20,20 +19,17 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from textual import work
 from textual.app import App, ComposeResult
 from textual.containers import ScrollableContainer, Vertical
-from textual.reactive import var
 from textual.widgets import Footer, Header, Static
 
 from config import get_config, get_enabled_agents
 
-# ── Backward-compat IPC (queue-based dispatch, kept for scripts) ──────────
+# ── Backward-compat IPC ───────────────────────────────────────────────────
 
 _LIVE_DIR = Path(os.environ.get(
     "AI_COLLAB_LIVE_DIR",
@@ -43,33 +39,20 @@ QUEUE_FILE = _LIVE_DIR / "queue.jsonl"
 RESULTS_DIR = _LIVE_DIR / "results"
 
 
-def dispatch_to_tui(
-    question: str,
-    request_id: str | None = None,
-    cwd: str | None = None,
-    label: str | None = None,
-) -> str:
-    """Write a request to the TUI queue (backward-compat IPC).
-
-    Returns the request_id so the caller can poll for results.
-    """
+def dispatch_to_tui(question: str, request_id: str | None = None,
+                    cwd: str | None = None, label: str | None = None) -> str:
     import uuid
     req_id = request_id or uuid.uuid4().hex[:12]
     _LIVE_DIR.mkdir(parents=True, exist_ok=True)
-    entry = {
-        "id": req_id,
-        "question": question,
-        "cwd": cwd,
-        "label": label,
-        "timestamp": datetime.now().isoformat(),
-    }
     with open(QUEUE_FILE, "a", encoding="utf-8") as f:
-        f.write(json.dumps(entry) + "\n")
+        f.write(json.dumps({
+            "id": req_id, "question": question, "cwd": cwd,
+            "label": label, "timestamp": datetime.now().isoformat(),
+        }) + "\n")
     return req_id
 
 
 def get_tui_result(request_id: str, timeout: float = 900) -> dict | None:
-    """Poll for a TUI result (backward-compat IPC)."""
     import time
     result_path = RESULTS_DIR / f"{request_id}.json"
     deadline = time.time() + timeout
@@ -82,13 +65,18 @@ def get_tui_result(request_id: str, timeout: float = 900) -> dict | None:
     return None
 
 
-# ── Data structures ───────────────────────────────────────────────────────
+# ── Constants ─────────────────────────────────────────────────────────────
 
+_AGENT_COLORS = ["#ff9f00", "#a78bfa", "#34d399", "#f472b6", "#60a5fa"]
+_BRAILLE = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+
+# ── Data structures ───────────────────────────────────────────────────────
 
 @dataclass
 class AgentResponse:
     agent_name: str
-    content: str | None = None  # None means response not yet saved
+    content: str | None = None
     created_at: str | None = None
 
 
@@ -104,120 +92,25 @@ class RoundInfo:
 
 
 @dataclass
-class SessionSnapshot:
+class FullSessionData:
     session_id: str
     topic: str
     project: str | None
-    status: str          # 'active' | 'completed'
+    status: str
     created_at: str
-    latest_round: RoundInfo | None
-    consensus_available: bool
-    is_running: bool     # round in-progress (round exists, responses incomplete)
+    rounds: list[RoundInfo]
+    consensus_content: str | None
+    is_running: bool
 
 
-# ── DB polling ─────────────────────────────────────────────────────────────
-
-
-def _poll_db(db_path: Path, hours: int = 24, limit: int = 6, agent_count: int = 2) -> list[SessionSnapshot]:
-    """Read recent sessions from the brainstorm SQLite DB (read-only, WAL-safe)."""
-    if not db_path.exists():
-        return []
-
-    try:
-        # WAL mode allows concurrent reads without blocking the MCP writer
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, check_same_thread=False)
-        conn.row_factory = sqlite3.Row
-    except Exception:
-        try:
-            conn = sqlite3.connect(str(db_path), check_same_thread=False)
-            conn.row_factory = sqlite3.Row
-        except Exception:
-            return []
-
-    try:
-        cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
-        sessions = conn.execute(
-            "SELECT * FROM sessions WHERE created_at >= ? ORDER BY created_at DESC LIMIT ?",
-            (cutoff, limit),
-        ).fetchall()
-
-        snapshots = []
-        for s in sessions:
-            rounds = conn.execute(
-                "SELECT * FROM rounds WHERE session_id = ? ORDER BY round_number",
-                (s["id"],),
-            ).fetchall()
-
-            total_rounds = len(rounds)
-            latest_round = None
-            is_running = False
-
-            if rounds:
-                r = rounds[-1]  # latest round
-                responses_rows = conn.execute(
-                    "SELECT * FROM responses WHERE round_id = ? ORDER BY created_at",
-                    (r["id"],),
-                ).fetchall()
-
-                responses = [
-                    AgentResponse(
-                        agent_name=row["agent_name"],
-                        content=row["content"],
-                        created_at=row["created_at"],
-                    )
-                    for row in responses_rows
-                ]
-
-                latest_round = RoundInfo(
-                    round_id=r["id"],
-                    round_number=r["round_number"],
-                    total_rounds=total_rounds,
-                    objective=r["objective"],
-                    question=r["question"],
-                    created_at=r["created_at"],
-                    responses=responses,
-                )
-
-                # "In progress": round created < 30 min ago, not all agents responded yet
-                if s["status"] == "active":
-                    round_dt = _parse_dt(r["created_at"])
-                    if round_dt:
-                        age = (datetime.now(timezone.utc) - round_dt).total_seconds()
-                        if age < 1800 and len(responses) < agent_count:
-                            is_running = True
-
-            consensus = conn.execute(
-                "SELECT id FROM consensus WHERE session_id = ? LIMIT 1",
-                (s["id"],),
-            ).fetchone()
-
-            snapshots.append(SessionSnapshot(
-                session_id=s["id"],
-                topic=s["topic"],
-                project=s["project"],
-                status=s["status"],
-                created_at=s["created_at"],
-                latest_round=latest_round,
-                consensus_available=bool(consensus),
-                is_running=is_running,
-            ))
-
-        return snapshots
-
-    except Exception:
-        return []
-    finally:
-        conn.close()
-
+# ── DB helpers ────────────────────────────────────────────────────────────
 
 def _parse_dt(s: str | None) -> datetime | None:
     if not s:
         return None
     try:
         dt = datetime.fromisoformat(s)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
     except ValueError:
         return None
 
@@ -229,20 +122,272 @@ def _time_ago(s: str | None) -> str:
     secs = int((datetime.now(timezone.utc) - dt).total_seconds())
     if secs < 60:
         return f"{secs}s ago"
-    elif secs < 3600:
+    if secs < 3600:
         return f"{secs // 60}m ago"
-    else:
-        return f"{secs // 3600}h {(secs % 3600) // 60}m ago"
+    return f"{secs // 3600}h {(secs % 3600) // 60}m ago"
 
 
-# ── Session Card Widget ────────────────────────────────────────────────────
+def _open_db(db_path: Path) -> sqlite3.Connection | None:
+    if not db_path.exists():
+        return None
+    for uri in (f"file:{db_path}?mode=ro", str(db_path)):
+        try:
+            conn = sqlite3.connect(uri if "?" in uri else uri,
+                                   uri="?" in uri, check_same_thread=False)
+            conn.row_factory = sqlite3.Row
+            return conn
+        except Exception:
+            pass
+    return None
 
+
+def _poll_sessions(
+    db_path: Path,
+    hours: int = 24,
+    limit: int = 6,
+    agent_names: set[str] | None = None,
+) -> list[FullSessionData]:
+    """Load recent sessions with all rounds/responses in one DB round-trip."""
+    conn = _open_db(db_path)
+    if conn is None:
+        return []
+    try:
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+        sessions = conn.execute(
+            "SELECT * FROM sessions WHERE created_at >= ? ORDER BY created_at DESC LIMIT ?",
+            (cutoff, limit),
+        ).fetchall()
+
+        results: list[FullSessionData] = []
+        for s in sessions:
+            rounds_rows = conn.execute(
+                "SELECT * FROM rounds WHERE session_id = ? ORDER BY round_number",
+                (s["id"],),
+            ).fetchall()
+            total_rounds = len(rounds_rows)
+
+            rounds: list[RoundInfo] = []
+            for r in rounds_rows:
+                resp_rows = conn.execute(
+                    "SELECT * FROM responses WHERE round_id = ? ORDER BY created_at",
+                    (r["id"],),
+                ).fetchall()
+                rounds.append(RoundInfo(
+                    round_id=r["id"],
+                    round_number=r["round_number"],
+                    total_rounds=total_rounds,
+                    objective=r["objective"],
+                    question=r["question"],
+                    created_at=r["created_at"],
+                    responses=[
+                        AgentResponse(row["agent_name"], row["content"], row["created_at"])
+                        for row in resp_rows
+                    ],
+                ))
+
+            is_running = False
+            if rounds and s["status"] == "active":
+                latest = rounds[-1]
+                round_dt = _parse_dt(latest.created_at)
+                if round_dt:
+                    age = (datetime.now(timezone.utc) - round_dt).total_seconds()
+                    if age < 1800:
+                        responded = {r.agent_name for r in latest.responses if r.content}
+                        if agent_names:
+                            is_running = not agent_names.issubset(responded)
+                        else:
+                            # Infer expected agents from all responses seen in this session
+                            all_session_agents = {
+                                resp.agent_name
+                                for r in rounds
+                                for resp in r.responses
+                                if resp.content
+                            }
+                            is_running = bool(all_session_agents - responded)
+
+            consensus_row = conn.execute(
+                "SELECT content FROM consensus WHERE session_id = ? LIMIT 1",
+                (s["id"],),
+            ).fetchone()
+
+            results.append(FullSessionData(
+                session_id=s["id"],
+                topic=s["topic"],
+                project=s["project"],
+                status=s["status"],
+                created_at=s["created_at"],
+                rounds=rounds,
+                consensus_content=consensus_row["content"] if consensus_row else None,
+                is_running=is_running,
+            ))
+        return results
+    except Exception:
+        return []
+    finally:
+        conn.close()
+
+
+def _complete_session_db(db_path: Path, session_id: str) -> None:
+    """Mark a session as completed directly in the DB."""
+    try:
+        conn = sqlite3.connect(str(db_path), check_same_thread=False)
+        conn.execute("UPDATE sessions SET status = 'completed' WHERE id = ?", (session_id,))
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+
+# ── Flow art renderer ─────────────────────────────────────────────────────
+
+def _extract_summary(content: str) -> str:
+    """Return first meaningful line from response content."""
+    import re
+    _skip = re.compile(
+        r"^[✓✗⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏⚠✘]"
+        r"|brainstorm-|atlas-|skill\("
+        r"|^\s*[\[{]"
+        r"|^\s*[|┌┐└┘├┤┬┴┼─│]",
+        re.UNICODE,
+    )
+    for raw in content.split("\n"):
+        ln = raw.strip()
+        if not ln or _skip.search(ln):
+            continue
+        for pfx in ("## ", "### ", "# ", "**", "- ", "> ", "* "):
+            if ln.startswith(pfx):
+                ln = ln[len(pfx):].strip()
+        if ln:
+            return ln[:70] + "…" if len(ln) > 70 else ln
+    return "(no summary)"
+
+
+def _render_flow_art(
+    session: FullSessionData,
+    agent_names: set[str],
+    color_map: dict[str, str],
+    frame: int,
+) -> list[str]:
+    """Branching dot-graph for one session.
+
+    Each agent gets its own horizontal lane; rounds are columns.
+    ◉ fans out to all agents, results converge to ◆.
+
+      ╭── ● ── ● ──╮
+      │             │
+    ◉─┼── ● ── ⠋ ──┼── ◆
+      │             │
+      ╰── ● ── ● ──╯
+
+    Colored dot = agent responded  ○ = no response  ⠋ = pending (running only)
+    """
+    sp = _BRAILLE[frame % len(_BRAILLE)]
+    rounds = session.rounds
+
+    all_agents = sorted(
+        set(agent_names) | {
+            resp.agent_name for r in rounds for resp in r.responses
+        }
+    )
+    N = len(all_agents)
+
+    if N == 0 or not rounds:
+        return [f"  [#00d7ff]◉[/]  [dim]{sp} waiting…[/dim]"]
+
+    M = len(rounds)
+    H = 2 * N - 1
+    center = N - 1
+
+    responded_sets = [
+        {resp.agent_name for resp in r.responses if resp.content}
+        for r in rounds
+    ]
+
+    # Plain rendered width of the middle section: M dots + (M-1) × " ── " (4 chars)
+    mid_width = M + (M - 1) * 4
+    has_consensus = bool(session.consensus_content)
+
+    rows: list[str] = []
+
+    for row in range(H):
+        is_agent_row = (row % 2 == 0)
+        ai = row // 2
+        parts: list[str] = []
+
+        # ── LEFT (6 rendered chars) ──────────────────────────────────────
+        if N == 1:
+            parts.append("[#00d7ff]◉[/][dim]── [/dim]")
+        elif row == 0:
+            parts.append("  [dim]╭── [/dim]")
+        elif row == H - 1:
+            parts.append("  [dim]╰── [/dim]")
+        elif is_agent_row and row == center:
+            parts.append("[#00d7ff]◉[/][dim]─┼── [/dim]")
+        elif not is_agent_row and row == center:
+            parts.append("[#00d7ff]◉[/][dim]─┤   [/dim]")
+        elif is_agent_row:
+            parts.append("  [dim]├── [/dim]")
+        else:
+            parts.append("  [dim]│   [/dim]")
+
+        # ── MIDDLE (rounds as columns) ───────────────────────────────────
+        if is_agent_row:
+            agent = all_agents[ai]
+            color = color_map.get(agent, "#ffffff")
+            for ri, responded in enumerate(responded_sets):
+                if agent in responded:
+                    parts.append(f"[{color}]●[/]")
+                elif session.is_running and ri == M - 1:
+                    parts.append(f"[{color}]{sp}[/]")
+                else:
+                    parts.append(f"[{color}]○[/]")
+                if ri < M - 1:
+                    parts.append("[dim] ── [/dim]")
+        else:
+            parts.append(" " * mid_width)
+
+        # ── RIGHT (fan-in + consensus) ───────────────────────────────────
+        if N == 1:
+            if has_consensus:
+                short = _extract_summary(session.consensus_content)[:40]
+                parts.append(f"[dim] ── [/dim][#00ff9f]◆[/] [dim]{short}[/dim]")
+            elif session.is_running:
+                parts.append(f"[dim] ── {sp}[/dim]")
+        else:
+            if row == 0:
+                parts.append("[dim] ──╮[/dim]")
+            elif row == H - 1:
+                parts.append("[dim] ──╯[/dim]")
+            elif is_agent_row and row == center:
+                if has_consensus:
+                    short = _extract_summary(session.consensus_content)[:40]
+                    parts.append(f"[dim] ──┼── [/dim][#00ff9f]◆[/] [dim]{short}[/dim]")
+                elif session.is_running:
+                    parts.append(f"[dim] ──┼── {sp}[/dim]")
+                else:
+                    parts.append("[dim] ──┤[/dim]")
+            elif not is_agent_row and row == center:
+                if has_consensus:
+                    short = _extract_summary(session.consensus_content)[:40]
+                    parts.append(f"[dim] ──┤ [/dim][#00ff9f]◆[/] [dim]{short}[/dim]")
+                elif session.is_running:
+                    parts.append(f"[dim] ──┤ {sp}[/dim]")
+                else:
+                    parts.append("[dim] ──┤[/dim]")
+            elif is_agent_row:
+                parts.append("[dim] ──┤[/dim]")
+            else:
+                parts.append("[dim]   │[/dim]")
+
+        rows.append("  " + "".join(parts))
+
+    return rows
+
+
+# ── Session Card ──────────────────────────────────────────────────────────
 
 class SessionCard(Static):
-    """Compact rich-text card for one brainstorm session.
-
-    Extends Static — call update_snap() to refresh the rendered content.
-    """
+    """Full-width session card with embedded neural-net flow visualization."""
 
     DEFAULT_CSS = """
     SessionCard {
@@ -251,123 +396,85 @@ class SessionCard(Static):
         margin: 0 0 1 0;
         height: auto;
     }
-
-    SessionCard.running {
-        border: solid $accent;
-    }
-
-    SessionCard.done {
-        border: solid $success;
-    }
+    SessionCard.running  { border: solid $accent; }
+    SessionCard.done     { border: solid $success; }
+    SessionCard.focused  { border: solid $warning; }
     """
 
-    def __init__(self, snap: SessionSnapshot, **kwargs):
-        super().__init__(self._build(snap), **kwargs)
-        self._snap = snap
+    def __init__(
+        self,
+        session: FullSessionData,
+        color_map: dict[str, str],
+        agent_names: set[str],
+        frame: int = 0,
+        **kwargs,
+    ):
+        self._session = session
+        self._color_map = color_map
+        self._agent_names = agent_names
+        self._frame = frame
+        super().__init__(self._build(), **kwargs)
 
-    def update_snap(self, snap: SessionSnapshot) -> None:
-        self._snap = snap
-        new_cls = "running" if snap.is_running else ("done" if snap.status == "completed" else "")
-        # Update CSS classes
+    def update_session(self, session: FullSessionData) -> None:
+        self._session = session
+        self._repaint()
+
+    def tick(self, frame: int) -> None:
+        """Advance animation frame — only repaints if session is running."""
+        if self._session.is_running:
+            self._frame = frame
+            self._repaint()
+
+    def _repaint(self) -> None:
+        s = self._session
+        cls = "running" if s.is_running else ("done" if s.status == "completed" else "")
         self.remove_class("running", "done")
-        if new_cls:
-            self.add_class(new_cls)
-        self.update(self._build(snap))
+        if cls:
+            self.add_class(cls)
+        self.update(self._build())
 
-    @staticmethod
-    def _extract_summary(content: str) -> str:
-        """Return a short summary line from agent response content.
-
-        Skips tool-call lines, JSON artifacts, spinner chars, and blank lines.
-        """
-        import re as _re
-        # Patterns that indicate tool-call/status lines, not real content
-        _tool_re = _re.compile(
-            r"^[✓✗⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏⚠✘]"   # leading status glyph
-            r"|brainstorm-|atlas-|skill\("   # tool name fragments
-            r"|^\s*[\[{]"                    # JSON arrays/objects
-            r"|^\s*[|┌┐└┘├┤┬┴┼─│]",         # box drawing / table chars
-            _re.UNICODE,
-        )
-        for raw in content.split("\n"):
-            ln = raw.strip()
-            if not ln:
-                continue
-            if _tool_re.search(ln):
-                continue
-            # Strip leading markdown markers
-            for prefix in ("## ", "### ", "# ", "**", "- ", "> ", "* "):
-                if ln.startswith(prefix):
-                    ln = ln[len(prefix):].strip()
-            if not ln:
-                continue
-            return ln[:72] + "…" if len(ln) > 72 else ln
-        return "(no summary)"
-
-    @staticmethod
-    def _build(snap: SessionSnapshot) -> str:
+    def _build(self) -> str:
+        s = self._session
         lines: list[str] = []
 
-        # ── Header row: status badge + topic + session ID ──
-        if snap.is_running:
+        # ── Header ──────────────────────────────────────────────────────
+        if s.is_running:
             badge = "[bold yellow]◌ RUNNING[/bold yellow]"
-        elif snap.status == "completed":
+        elif s.status == "completed":
             badge = "[bold green]✓ DONE[/bold green]"
         else:
             badge = "[dim]● IDLE[/dim]"
 
-        topic = snap.topic if len(snap.topic) <= 48 else snap.topic[:47] + "…"
-        sid_short = snap.session_id[-8:]
-        lines.append(f"{badge}  [bold]{topic}[/bold]  [dim]{sid_short}[/dim]")
+        topic = s.topic if len(s.topic) <= 52 else s.topic[:51] + "…"
+        sid = s.session_id[-8:]
+        lines.append(f"{badge}  [bold]{topic}[/bold]  [dim]{sid}[/dim]")
 
-        # ── Metadata row ──
-        meta_parts = []
-        if snap.project:
-            meta_parts.append(f"[dim]project:[/dim] {snap.project}")
-        meta_parts.append(_time_ago(snap.created_at))
-        lines.append("  " + "  [dim]·[/dim]  ".join(meta_parts))
-
-        # ── Latest round ──
-        r = snap.latest_round
-        if r:
+        # ── Metadata ─────────────────────────────────────────────────────
+        meta: list[str] = []
+        if s.project:
+            meta.append(f"[dim]project:[/dim] {s.project}")
+        meta.append(_time_ago(s.created_at))
+        if s.rounds:
+            r = s.rounds[-1]
             obj = (r.objective or r.question or "").strip()
-            obj_short = obj if len(obj) <= 60 else obj[:59] + "…"
-            lines.append(
-                f"  [dim]Round {r.round_number}/{r.total_rounds}[/dim]"
-                + (f"  [dim]{obj_short}[/dim]" if obj_short else "")
-            )
+            label = f"round {r.round_number}/{r.total_rounds}"
+            if obj:
+                label += f" · {obj[:40]}{'…' if len(obj) > 40 else ''}"
+            meta.append(f"[dim]{label}[/dim]")
+        lines.append("  " + "  [dim]·[/dim]  ".join(meta))
 
-            if r.responses:
-                lines.append("")
-                for resp in r.responses:
-                    name = resp.agent_name
-                    if resp.content:
-                        first = SessionCard._extract_summary(resp.content)
-                        lines.append(f"  [green]✓[/green] [bold]{name}[/bold]  [dim]{first}[/dim]")
-                    else:
-                        lines.append(f"  [yellow]⟳[/yellow] [bold]{name}[/bold]  [dim]waiting for response…[/dim]")
-            elif snap.is_running:
-                lines.append("")
-                lines.append("  [yellow]⟳[/yellow] [dim]agents dispatched, waiting for responses…[/dim]")
-            else:
-                lines.append("")
-                lines.append("  [dim]No responses yet[/dim]")
-        else:
-            lines.append("  [dim]No rounds yet[/dim]")
-
-        # ── Consensus ──
-        if snap.consensus_available:
-            lines.append("")
-            lines.append("  [bold green]◆ Consensus available[/bold green]")
+        # ── Flow visualization ────────────────────────────────────────────
+        lines.append("")
+        lines.extend(_render_flow_art(s, self._agent_names, self._color_map, self._frame))
+        lines.append("")
 
         return "\n".join(lines)
 
 
-# ── Main Monitor App ───────────────────────────────────────────────────────
-
+# ── Monitor App ───────────────────────────────────────────────────────────
 
 class BrainstormMonitor(App):
-    """Live DB monitor — shows all recent brainstorm sessions from any Claude Code instance."""
+    """Live session monitor with inline neural-net flow animations."""
 
     CSS = """
     Screen {
@@ -401,19 +508,33 @@ class BrainstormMonitor(App):
 
     BINDINGS = [
         ("q", "quit", "Quit"),
-        ("r", "refresh", "Refresh now"),
+        ("r", "refresh", "Refresh"),
         ("escape", "quit", "Quit"),
+        ("j", "focus_next", "↓"),
+        ("down", "focus_next", "↓"),
+        ("k", "focus_prev", "↑"),
+        ("up", "focus_prev", "↑"),
+        ("x", "stop_session", "Stop"),
     ]
 
-    def __init__(self, db_path: Path, hours: int = 24, limit: int = 6, agent_count: int = 2):
+    def __init__(
+        self,
+        db_path: Path,
+        hours: int = 24,
+        limit: int = 6,
+        agent_names: set[str] | None = None,
+    ):
         super().__init__()
         self.db_path = db_path
         self.hours = hours
         self.limit = limit
-        self.agent_count = agent_count
-        self._snapshots: list[SessionSnapshot] = []
-        self._cards: dict[str, SessionCard] = {}  # session_id → card
+        self._agent_names: set[str] = agent_names or set()
+        self._sessions: list[FullSessionData] = []
+        self._cards: dict[str, SessionCard] = {}
+        self._color_map: dict[str, str] = {}
+        self._anim_frame = 0
         self._last_refresh = "—"
+        self._focused_sid: str | None = None
         self.title = "AI Collab Monitor"
         self.sub_title = str(db_path)
 
@@ -427,48 +548,137 @@ class BrainstormMonitor(App):
     def on_mount(self) -> None:
         self._do_refresh()
         self.set_interval(2.0, self._do_refresh)
+        self.set_interval(0.5, self._tick_anim)
 
     def action_refresh(self) -> None:
         self._do_refresh()
 
+    def _sorted_ids(self) -> list[str]:
+        return [
+            s.session_id for s in sorted(
+                self._sessions,
+                key=lambda s: (1 if s.is_running else 0, s.created_at),
+                reverse=True,
+            )
+        ]
+
+    def _update_focus(self) -> None:
+        ids = self._sorted_ids()
+        if not ids:
+            self._focused_sid = None
+            return
+        if self._focused_sid not in ids:
+            self._focused_sid = ids[0]
+        for sid, card in self._cards.items():
+            if sid == self._focused_sid:
+                card.add_class("focused")
+            else:
+                card.remove_class("focused")
+
+    def action_focus_next(self) -> None:
+        ids = self._sorted_ids()
+        if not ids:
+            return
+        try:
+            self._focused_sid = ids[(ids.index(self._focused_sid) + 1) % len(ids)]
+        except ValueError:
+            self._focused_sid = ids[0]
+        self._update_focus()
+
+    def action_focus_prev(self) -> None:
+        ids = self._sorted_ids()
+        if not ids:
+            return
+        try:
+            self._focused_sid = ids[(ids.index(self._focused_sid) - 1) % len(ids)]
+        except ValueError:
+            self._focused_sid = ids[-1]
+        self._update_focus()
+
+    def action_stop_session(self) -> None:
+        if not self._focused_sid:
+            return
+        session = next((s for s in self._sessions if s.session_id == self._focused_sid), None)
+        if session and session.is_running:
+            _complete_session_db(self.db_path, self._focused_sid)
+            self._do_refresh()
+
+    def _tick_anim(self) -> None:
+        self._anim_frame += 1
+        for card in self._cards.values():
+            card.tick(self._anim_frame)
+
     def _do_refresh(self) -> None:
-        snaps = _poll_db(self.db_path, hours=self.hours, limit=self.limit, agent_count=self.agent_count)
-        self._snapshots = snaps
+        sessions = _poll_sessions(self.db_path, self.hours, self.limit, self._agent_names)
+        self._sessions = sessions
         self._last_refresh = datetime.now().strftime("%H:%M:%S")
-        self._sync_cards(snaps)
+        self._update_color_map(sessions)
+        self._sync_cards(sessions)
+        self._update_focus()
         self._update_status()
 
-    def _sync_cards(self, snaps: list[SessionSnapshot]) -> None:
-        """Add new session cards, update existing ones, remove stale ones."""
+    def _update_color_map(self, sessions: list[FullSessionData]) -> None:
+        """Assign stable colors to all known agent names (alphabetical sort)."""
+        all_names: set[str] = set(self._agent_names)
+        for s in sessions:
+            for r in s.rounds:
+                for resp in r.responses:
+                    all_names.add(resp.agent_name)
+        for name in sorted(all_names):
+            if name not in self._color_map:
+                self._color_map[name] = _AGENT_COLORS[len(self._color_map) % len(_AGENT_COLORS)]
+
+    def _sync_cards(self, sessions: list[FullSessionData]) -> None:
         grid = self.query_one("#session-grid", Vertical)
 
-        # Remove the empty-notice if any sessions arrived
         empty = grid.query("#empty")
-        if snaps and empty:
+        if sessions and empty:
             empty.remove()
 
-        new_ids = {s.session_id for s in snaps}
+        new_ids = {s.session_id for s in sessions}
         old_ids = set(self._cards.keys())
 
-        # Remove cards no longer in the result set
         for sid in old_ids - new_ids:
             card = self._cards.pop(sid, None)
             if card:
                 card.remove()
 
-        # Update existing cards and mount new ones
-        for snap in reversed(snaps):  # reversed so newest is at bottom
-            sid = snap.session_id
-            if sid in self._cards:
-                self._cards[sid].update_snap(snap)
+        # Sort: running first, then newest first
+        sorted_sessions = sorted(
+            sessions,
+            key=lambda s: (1 if s.is_running else 0, s.created_at),
+            reverse=True,
+        )
+
+        pre_existing = set(self._cards.keys())
+
+        # Update existing cards
+        for s in sorted_sessions:
+            if s.session_id in pre_existing:
+                self._cards[s.session_id].update_session(s)
+
+        # Mount new cards at the correct sorted position
+        for i, s in enumerate(sorted_sessions):
+            sid = s.session_id
+            if sid in pre_existing:
+                continue
+            cls = "running" if s.is_running else ("done" if s.status == "completed" else "")
+            card = SessionCard(s, self._color_map, self._agent_names, self._anim_frame, classes=cls)
+            self._cards[sid] = card
+
+            # Find first already-mounted card that should appear after this one
+            insert_before = None
+            for later in sorted_sessions[i + 1:]:
+                if later.session_id in pre_existing:
+                    insert_before = self._cards[later.session_id]
+                    break
+
+            if insert_before is not None:
+                grid.mount(card, before=insert_before)
             else:
-                cls = "running" if snap.is_running else ("done" if snap.status == "completed" else "")
-                card = SessionCard(snap, classes=cls)
-                self._cards[sid] = card
                 grid.mount(card)
 
-        # Show empty notice if no sessions
-        if not snaps and not grid.query("#empty"):
+        if not sessions and not grid.query("#empty"):
             grid.mount(Static(
                 f"[dim]No sessions in the last {self.hours}h. "
                 "Run /multi-ai-brainstorm in any Claude Code window to start one.[/dim]",
@@ -477,22 +687,19 @@ class BrainstormMonitor(App):
 
     def _update_status(self) -> None:
         bar = self.query_one("#statusbar", Static)
-        running = sum(1 for s in self._snapshots if s.is_running)
-        total = len(self._snapshots)
-
-        parts = []
+        running = sum(1 for s in self._sessions if s.is_running)
+        total = len(self._sessions)
+        parts: list[str] = []
         if running:
             parts.append(f"[bold yellow]◌ {running} running[/bold yellow]")
         if total:
             parts.append(f"{total} session(s)")
         parts.append(f"refreshed {self._last_refresh}")
-        parts.append("[bold]r[/bold] refresh  [bold]q[/bold] quit")
-
+        parts.append("[bold]j/k[/bold] nav  [bold]x[/bold] stop  [bold]r[/bold] refresh  [bold]q[/bold] quit")
         bar.update(" " + "  |  ".join(parts))
 
 
 # ── Public API ─────────────────────────────────────────────────────────────
-
 
 def run_tui(
     question: str | None = None,
@@ -501,56 +708,23 @@ def run_tui(
     hours: int = 24,
     limit: int = 6,
 ) -> None:
-    """Launch the brainstorm monitor TUI.
-
-    Args:
-        question: Ignored (kept for CLI backward compatibility).
-        agent_names: Ignored (kept for CLI backward compatibility).
-        cwd: Ignored (kept for CLI backward compatibility).
-        hours: How many hours back to show sessions (default 24).
-        limit: Max sessions to display (default 6).
-    """
     cfg = get_config()
     db_path = Path(os.environ.get("BRAINSTORM_DB", str(cfg.db_path)))
-    agent_count = max(1, len(get_enabled_agents()))
-
-    app = BrainstormMonitor(
-        db_path=db_path,
-        hours=hours,
-        limit=limit,
-        agent_count=agent_count,
-    )
-    app.run()
+    names = set(get_enabled_agents().keys()) or None
+    BrainstormMonitor(db_path=db_path, hours=hours, limit=limit, agent_names=names).run()
 
 
 def main():
-    """CLI entry point."""
     import argparse
-
-    parser = argparse.ArgumentParser(
-        description="Live monitor for multi-AI brainstorm sessions (SQLite-backed, multi-instance)"
-    )
-    parser.add_argument(
-        "question",
-        nargs="?",
-        default=None,
-        help="Ignored — kept for backward compatibility",
-    )
-    parser.add_argument("--agents", "-a", help="Ignored — kept for backward compatibility")
-    parser.add_argument("--cwd", "-d", help="Ignored — kept for backward compatibility")
-    parser.add_argument(
-        "--hours",
-        type=int,
-        default=24,
-        help="Hours of history to show (default: 24)",
-    )
-    parser.add_argument(
-        "--limit",
-        type=int,
-        default=6,
-        help="Max sessions to display (default: 6)",
-    )
-
+    parser = argparse.ArgumentParser(description="Live AI Collab brainstorm monitor")
+    parser.add_argument("question", nargs="?", default=None,
+                        help="Ignored — backward compat")
+    parser.add_argument("--agents", "-a", help="Ignored — backward compat")
+    parser.add_argument("--cwd", "-d",   help="Ignored — backward compat")
+    parser.add_argument("--hours", type=int, default=24,
+                        help="Hours of history to show (default: 24)")
+    parser.add_argument("--limit", type=int, default=6,
+                        help="Max sessions to display (default: 6)")
     args = parser.parse_args()
     run_tui(hours=args.hours, limit=args.limit)
 

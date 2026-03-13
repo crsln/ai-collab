@@ -565,6 +565,27 @@ def bs_list_roles(agent_name: str | None = None, tag: str | None = None) -> str:
 
 
 @mcp.tool()
+def bs_suggest_roles(
+    topic: str,
+    agents: str | None = None,
+    top_n: int = 6,
+) -> str:
+    """Suggest role templates appropriate for a brainstorm topic.
+
+    Args:
+        topic: The brainstorm topic/question (same string passed to bs_new_session).
+        agents: Comma-separated agent names for per-agent suggestions (e.g. "copilot,gemini").
+        top_n: Number of top roles to return (default: 6).
+
+    Returns JSON with top_roles (ranked by topic match) and assignments (per-agent suggestions).
+    Apply suggestions with bs_apply_role(session_id, agent_name, slug).
+    """
+    agent_list = [a.strip() for a in agents.split(",") if a.strip()] if agents else []
+    result = _db.suggest_roles(topic, agent_list, top_n=top_n)
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
 def bs_get_role_template(slug: str) -> str:
     """Get full details of a role template by slug or ID.
 
