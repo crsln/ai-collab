@@ -532,5 +532,50 @@ def bs_set_tool_guide(
     return json.dumps(result, indent=2)
 
 
+# -- Role Library tools (read-only for agents) --
+
+@mcp.tool()
+def bs_list_roles(agent_name: str | None = None, tag: str | None = None) -> str:
+    """List available role templates from the role library.
+
+    Args:
+        agent_name: Filter to roles for this agent (also includes agent-agnostic roles).
+        tag: Filter by tag (e.g. 'security', 'architecture').
+
+    Returns:
+        List of role templates with slug, display_name, description, and usage stats.
+    """
+    roles = _db.list_role_templates(agent_name, tag)
+    # Return summary (not full role_text) for listing
+    summary = [
+        {
+            "slug": r["slug"],
+            "display_name": r["display_name"],
+            "agent_name": r["agent_name"],
+            "description": r["description"],
+            "tags": r["tags"],
+            "usage_count": r["usage_count"],
+        }
+        for r in roles
+    ]
+    return json.dumps(summary, indent=2)
+
+
+@mcp.tool()
+def bs_get_role_template(slug: str) -> str:
+    """Get full details of a role template by slug or ID.
+
+    Args:
+        slug: The role template slug or ID.
+
+    Returns:
+        Full role template including role_text, approach, tags, and usage stats.
+    """
+    result = _db.get_role_template(slug)
+    if not result:
+        return f"Role template '{slug}' not found. Use bs_list_roles() to see available templates."
+    return json.dumps(result, indent=2)
+
+
 if __name__ == "__main__":
     mcp.run()

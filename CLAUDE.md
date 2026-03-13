@@ -80,13 +80,25 @@ the MCP server process happens to be in, not the target project.
 | `bs_respond_to_feedback(...)` | Save verdict |
 | `bs_save_consensus(session_id, content)` | Final document |
 | `bs_get_onboarding(agent_name, session_id?)` | Agent onboarding entry point |
+| `bs_create_role(slug, display_name, ...)` | Create reusable role template |
+| `bs_list_roles(agent_name?, tag?)` | List role templates from library |
+| `bs_apply_role(session_id, agent_name, slug)` | Apply role template to session |
+| `bs_update_role(slug, ...)` | Refine a role template |
 
 ### Self-Describing DB
 
-Agent definitions, workflow templates, and tool guides are stored in the DB.
+Agent definitions, workflow templates, tool guides, and role templates are stored in the DB.
 Agents call `bs_get_onboarding(agent_name)` to discover everything they need.
 
 Seed defaults: `python brainstorm_cli.py seed-defaults`
+
+### Role Library
+
+Reusable role templates live in the `role_library` table. Use `bs_list_roles()` to browse,
+`bs_apply_role(session_id, agent_name, slug)` to assign, and `bs_update_role()` to refine.
+8 seed templates: code-reviewer, security-reviewer, architecture-analyst, performance-analyst,
+ux-design-critic, devil-advocate, copilot-code-verifier, gemini-research-analyst.
+Templates track `usage_count` and `last_used_at` for optimization.
 
 ### Agent MCP Configuration
 

@@ -150,6 +150,24 @@ class BrainstormDB:
                 created_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS role_library (
+                id TEXT PRIMARY KEY,
+                slug TEXT NOT NULL UNIQUE,
+                display_name TEXT NOT NULL,
+                agent_name TEXT,
+                description TEXT NOT NULL,
+                role_text TEXT NOT NULL,
+                approach TEXT,
+                tags TEXT DEFAULT '[]',
+                usage_count INTEGER DEFAULT 0,
+                last_used_at TEXT,
+                notes TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_role_library_agent ON role_library(agent_name);
+            CREATE INDEX IF NOT EXISTS idx_role_library_slug ON role_library(slug);
             CREATE INDEX IF NOT EXISTS idx_rounds_session ON rounds(session_id);
             CREATE INDEX IF NOT EXISTS idx_responses_lookup ON responses(round_id, agent_name);
             CREATE INDEX IF NOT EXISTS idx_consensus_session ON consensus(session_id);
@@ -537,6 +555,131 @@ class BrainstormDB:
                 "SELECT * FROM tool_guides ORDER BY phase, tool_name"
             ).fetchall()
         return [dict(r) for r in rows]
+
+    # -- Role Library --
+
+    def create_role_template(
+        self, slug: str, display_name: str, description: str,
+        role_text: str, agent_name: str | None = None,
+        approach: str | None = None, tags: list[str] | None = None,
+        notes: str | None = None,
+    ) -> dict:
+        import json as _json
+        rid = f"rl_{_uid()}"
+        now = _now()
+        tags_json = _json.dumps(tags or [])
+        self._conn.execute(
+            "INSERT INTO role_library (id, slug, display_name, agent_name, description, "
+            "role_text, approach, tags, notes, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (rid, slug, display_name, agent_name, description, role_text, approach, tags_json, notes, now, now),
+        )
+        self._conn.commit()
+        return {"id": rid, "slug": slug, "display_name": display_name, "created": True}
+
+    def get_role_template(self, slug_or_id: str) -> dict | None:
+        import json as _json
+        row = self._conn.execute(
+            "SELECT * FROM role_library WHERE slug = ? OR id = ?",
+            (slug_or_id, slug_or_id),
+        ).fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        d["tags"] = _json.loads(d.get("tags") or "[]")
+        return d
+
+    def list_role_templates(
+        self, agent_name: str | None = None, tag: str | None = None,
+    ) -> list[dict]:
+        import json as _json
+        if agent_name:
+            rows = self._conn.execute(
+                "SELECT * FROM role_library WHERE agent_name = ? OR agent_name IS NULL "
+                "ORDER BY usage_count DESC, display_name",
+                (agent_name,),
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT * FROM role_library ORDER BY usage_count DESC, display_name"
+            ).fetchall()
+        results = []
+        for r in rows:
+            d = dict(r)
+            d["tags"] = _json.loads(d.get("tags") or "[]")
+            if tag and tag not in d["tags"]:
+                continue
+            results.append(d)
+        return results
+
+    def update_role_template(
+        self, slug_or_id: str, *,
+        display_name: str | None = None, description: str | None = None,
+        role_text: str | None = None, approach: str | None = None,
+        tags: list[str] | None = None, notes: str | None = None,
+    ) -> dict | None:
+        import json as _json
+        existing = self.get_role_template(slug_or_id)
+        if not existing:
+            return None
+        now = _now()
+        updates = []
+        params = []
+        if display_name is not None:
+            updates.append("display_name = ?"); params.append(display_name)
+        if description is not None:
+            updates.append("description = ?"); params.append(description)
+        if role_text is not None:
+            updates.append("role_text = ?"); params.append(role_text)
+        if approach is not None:
+            updates.append("approach = ?"); params.append(approach)
+        if tags is not None:
+            updates.append("tags = ?"); params.append(_json.dumps(tags))
+        if notes is not None:
+            updates.append("notes = ?"); params.append(notes)
+        if not updates:
+            return existing
+        updates.append("updated_at = ?"); params.append(now)
+        params.append(existing["id"])
+        self._conn.execute(
+            f"UPDATE role_library SET {', '.join(updates)} WHERE id = ?", params,
+        )
+        self._conn.commit()
+        return self.get_role_template(existing["id"])
+
+    def delete_role_template(self, slug_or_id: str) -> bool:
+        existing = self.get_role_template(slug_or_id)
+        if not existing:
+            return False
+        self._conn.execute("DELETE FROM role_library WHERE id = ?", (existing["id"],))
+        self._conn.commit()
+        return True
+
+    def apply_role_template(self, session_id: str, agent_name: str, slug_or_id: str) -> dict | None:
+        """Apply a role template to a session. Copies role_text to agent_roles and bumps usage_count."""
+        template = self.get_role_template(slug_or_id)
+        if not template:
+            return None
+        now = _now()
+        # Bump usage
+        self._conn.execute(
+            "UPDATE role_library SET usage_count = usage_count + 1, last_used_at = ? WHERE id = ?",
+            (now, template["id"]),
+        )
+        # Set session role (approach appended if present)
+        role_text = template["role_text"]
+        if template.get("approach"):
+            role_text += f"\n\nApproach: {template['approach']}"
+        role_result = self.set_role(session_id, agent_name, role_text)
+        self._conn.commit()
+        return {
+            "template_id": template["id"],
+            "template_slug": template["slug"],
+            "agent_name": agent_name,
+            "session_id": session_id,
+            "role_id": role_result["id"],
+            "applied": True,
+        }
 
     # -- Onboarding (composite) --
 

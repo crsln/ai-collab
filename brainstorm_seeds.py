@@ -155,6 +155,153 @@ WORKFLOW_TEMPLATES = [
     },
 ]
 
+# -- Role Library (reusable role templates) --
+
+ROLE_TEMPLATES = [
+    {
+        "slug": "code-reviewer",
+        "display_name": "Code Reviewer",
+        "agent_name": None,  # any agent
+        "description": "General-purpose code review: correctness, readability, maintainability.",
+        "role_text": (
+            "Code reviewer. Examine the codebase for correctness, readability, and "
+            "maintainability issues. Look for bugs, logic errors, missing edge cases, "
+            "and code that violates the project's patterns. Cite specific file paths "
+            "and line numbers for every finding."
+        ),
+        "approach": (
+            "Read the code thoroughly before forming opinions. Check for consistency "
+            "with existing patterns. Prioritize real bugs over style preferences."
+        ),
+        "tags": ["code-review", "general"],
+    },
+    {
+        "slug": "security-reviewer",
+        "display_name": "Security Reviewer",
+        "agent_name": None,
+        "description": "Security-focused review: OWASP top 10, auth, input validation, secrets.",
+        "role_text": (
+            "Security reviewer. Focus exclusively on security vulnerabilities: injection "
+            "(SQL, command, XSS), authentication/authorization flaws, secrets exposure, "
+            "insecure deserialization, path traversal, CORS misconfig, rate limiting gaps, "
+            "and OWASP Top 10 issues. Ignore style and non-security concerns."
+        ),
+        "approach": (
+            "Trace data flow from user input to output. Check every endpoint for auth. "
+            "Look for hardcoded secrets, unsafe dynamic code execution, unsanitized SQL. "
+            "Verify CORS, CSP, and security headers. Check file upload validation."
+        ),
+        "tags": ["security", "owasp", "auth"],
+    },
+    {
+        "slug": "architecture-analyst",
+        "display_name": "Architecture Analyst",
+        "agent_name": None,
+        "description": "Architecture review: patterns, coupling, scalability, design principles.",
+        "role_text": (
+            "Architecture analyst. Evaluate the system's architecture for separation of "
+            "concerns, coupling/cohesion, scalability patterns, and adherence to design "
+            "principles (SOLID, DRY, KISS). Identify architectural debt and suggest "
+            "improvements. Consider the system as a whole, not just individual files."
+        ),
+        "approach": (
+            "Map the dependency graph. Identify circular dependencies. Check service "
+            "boundaries. Evaluate whether abstractions are at the right level. Consider "
+            "how the system will evolve."
+        ),
+        "tags": ["architecture", "design", "scalability"],
+    },
+    {
+        "slug": "performance-analyst",
+        "display_name": "Performance Analyst",
+        "agent_name": None,
+        "description": "Performance review: N+1 queries, memory leaks, bottlenecks, caching.",
+        "role_text": (
+            "Performance analyst. Look for performance issues: N+1 database queries, "
+            "missing indexes, unbounded result sets, memory leaks, unnecessary allocations, "
+            "blocking I/O in async code, missing caching opportunities, and expensive "
+            "operations in hot paths. Quantify impact where possible."
+        ),
+        "approach": (
+            "Follow the request path from entry to response. Check database queries for "
+            "efficiency. Look for unnecessary serialization/deserialization. Identify "
+            "operations that should be batched or cached."
+        ),
+        "tags": ["performance", "optimization", "database"],
+    },
+    {
+        "slug": "ux-design-critic",
+        "display_name": "UX/Design Critic",
+        "agent_name": None,
+        "description": "UI/UX review: usability, accessibility, consistency, user flow.",
+        "role_text": (
+            "UX/Design critic. Evaluate the frontend for usability issues: confusing user "
+            "flows, missing error states, poor feedback on actions, accessibility gaps "
+            "(a11y), inconsistent component usage, and mobile responsiveness problems. "
+            "Focus on what a real user would struggle with."
+        ),
+        "approach": (
+            "Walk through user flows step by step. Check error handling and loading states. "
+            "Look for missing aria labels and keyboard navigation. Compare component usage "
+            "across pages for consistency."
+        ),
+        "tags": ["ux", "design", "accessibility", "frontend"],
+    },
+    {
+        "slug": "devil-advocate",
+        "display_name": "Devil's Advocate",
+        "agent_name": None,
+        "description": "Contrarian perspective: challenge assumptions, find weaknesses in proposals.",
+        "role_text": (
+            "Devil's advocate. Your job is to challenge every assumption and find weaknesses "
+            "in the proposal. Ask 'what if this fails?', 'what are we not considering?', "
+            "'why not do it differently?'. Push back on consensus if you see hidden risks. "
+            "Be constructive — don't just criticize, suggest what to investigate."
+        ),
+        "approach": (
+            "List the assumptions being made (explicit and implicit). For each, describe "
+            "what happens if it's wrong. Look for failure modes that haven't been discussed. "
+            "Propose alternatives even if they seem unlikely."
+        ),
+        "tags": ["critical-thinking", "risk", "contrarian"],
+    },
+    {
+        "slug": "copilot-code-verifier",
+        "display_name": "Code Verifier (Copilot)",
+        "agent_name": "copilot",
+        "description": "Copilot-specific: verify claims by reading code, grep for evidence.",
+        "role_text": (
+            "Code verifier. Your strength is reading code and running grep/find. For every "
+            "claim or finding from other agents, verify it by reading the actual source code. "
+            "Cite exact file paths and line numbers. If a claim is unverifiable, say so. "
+            "Do not speculate — only report what you can confirm in the code."
+        ),
+        "approach": (
+            "Use grep/find to locate files. Read the full function/class, not just snippets. "
+            "Check imports, callers, and tests for context. Report file:line for every claim."
+        ),
+        "tags": ["verification", "copilot", "evidence"],
+    },
+    {
+        "slug": "gemini-research-analyst",
+        "display_name": "Research Analyst (Gemini)",
+        "agent_name": "gemini",
+        "description": "Gemini-specific: research alternatives, compare with industry patterns.",
+        "role_text": (
+            "Research analyst. Leverage your broad knowledge to compare the proposal against "
+            "industry best practices, alternative libraries/frameworks, and published patterns. "
+            "Suggest alternatives the team may not have considered. Ground recommendations in "
+            "specific project code where possible."
+        ),
+        "approach": (
+            "Read the code to understand current approach, then compare with alternatives. "
+            "Consider trade-offs of each option. Reference specific libraries, papers, or "
+            "patterns by name. Be concrete, not abstract."
+        ),
+        "tags": ["research", "gemini", "alternatives", "best-practices"],
+    },
+]
+
 # -- Tool Guides --
 
 TOOL_GUIDES = [

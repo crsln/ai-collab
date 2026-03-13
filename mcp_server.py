@@ -565,5 +565,133 @@ def bs_get_role(session_id: str, agent_name: str) -> str:
     return json.dumps(result, indent=2)
 
 
+# ── Role Library tools ─────────────────────────────────────────────────
+
+
+@mcp.tool()
+def bs_create_role(
+    slug: str, display_name: str, description: str, role_text: str,
+    agent_name: str | None = None, approach: str | None = None,
+    tags: str | None = None, notes: str | None = None,
+) -> str:
+    """Create a reusable role template in the role library.
+
+    Role templates define how an agent should behave in brainstorm sessions.
+    They can be agent-specific (only for copilot) or generic (any agent).
+    Apply them to sessions with bs_apply_role.
+
+    Args:
+        slug: Unique identifier (e.g. 'security-reviewer', 'perf-analyst').
+        display_name: Human-readable name.
+        description: One-line description of what this role focuses on.
+        role_text: The full role instructions given to the agent.
+        agent_name: If set, this role is only for this agent. None = any agent.
+        approach: Optional approach guidance (appended to role_text when applied).
+        tags: Comma-separated tags for filtering (e.g. 'security,code-review').
+        notes: Optional notes about when/how to use this role.
+    """
+    tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
+    return json.dumps(
+        _db.create_role_template(
+            slug, display_name, description, role_text,
+            agent_name=agent_name, approach=approach, tags=tag_list, notes=notes,
+        ),
+        indent=2,
+    )
+
+
+@mcp.tool()
+def bs_list_roles(agent_name: str | None = None, tag: str | None = None) -> str:
+    """List available role templates from the role library.
+
+    Args:
+        agent_name: Filter to roles for this agent (also includes agent-agnostic roles).
+        tag: Filter by tag (e.g. 'security', 'architecture').
+    """
+    roles = _db.list_role_templates(agent_name, tag)
+    summary = [
+        {
+            "slug": r["slug"],
+            "display_name": r["display_name"],
+            "agent_name": r["agent_name"],
+            "description": r["description"],
+            "tags": r["tags"],
+            "usage_count": r["usage_count"],
+        }
+        for r in roles
+    ]
+    return json.dumps(summary, indent=2)
+
+
+@mcp.tool()
+def bs_get_role_template(slug: str) -> str:
+    """Get full details of a role template by slug or ID.
+
+    Args:
+        slug: The role template slug or ID.
+    """
+    result = _db.get_role_template(slug)
+    if not result:
+        return f"Role template '{slug}' not found."
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+def bs_update_role(
+    slug: str, display_name: str | None = None, description: str | None = None,
+    role_text: str | None = None, approach: str | None = None,
+    tags: str | None = None, notes: str | None = None,
+) -> str:
+    """Update a role template. Only provided fields are changed.
+
+    Args:
+        slug: The role template slug or ID to update.
+        display_name: New display name.
+        description: New description.
+        role_text: New role instructions.
+        approach: New approach guidance.
+        tags: New comma-separated tags (replaces existing).
+        notes: New notes.
+    """
+    tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else None
+    result = _db.update_role_template(
+        slug, display_name=display_name, description=description,
+        role_text=role_text, approach=approach, tags=tag_list, notes=notes,
+    )
+    if not result:
+        return f"Role template '{slug}' not found."
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+def bs_delete_role(slug: str) -> str:
+    """Delete a role template from the library.
+
+    Args:
+        slug: The role template slug or ID to delete.
+    """
+    if _db.delete_role_template(slug):
+        return f"Role template '{slug}' deleted."
+    return f"Role template '{slug}' not found."
+
+
+@mcp.tool()
+def bs_apply_role(session_id: str, agent_name: str, slug: str) -> str:
+    """Apply a role template to an agent in a session.
+
+    Copies the role_text (+ approach) into the session's agent_roles,
+    and increments the template's usage_count.
+
+    Args:
+        session_id: The brainstorm session.
+        agent_name: Which agent to assign this role to.
+        slug: The role template slug or ID.
+    """
+    result = _db.apply_role_template(session_id, agent_name, slug)
+    if not result:
+        return f"Role template '{slug}' not found."
+    return json.dumps(result, indent=2)
+
+
 if __name__ == "__main__":
     mcp.run()

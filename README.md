@@ -168,12 +168,37 @@ See `ai-collab.toml.example` for more examples including Codex, Aider, and custo
 
 ## Self-Describing Database
 
-The brainstorm database is self-describing. Agent definitions, workflow templates, and tool guides are stored in global tables. Agents call `bs_get_onboarding(agent_name)` to discover everything they need.
+The brainstorm database is self-describing. Agent definitions, workflow templates, tool guides, and role templates are stored in global tables. Agents call `bs_get_onboarding(agent_name)` to discover everything they need.
 
 Seed defaults:
 ```bash
 python brainstorm_cli.py seed-defaults
 ```
+
+### Role Library
+
+Reusable role templates let you assign specialized behaviors to agents without rewriting instructions each session:
+
+```
+# List available roles
+Use bs_list_roles()
+Use bs_list_roles(agent_name="copilot")  # includes copilot-specific + generic roles
+Use bs_list_roles(tag="security")         # filter by tag
+
+# Apply to a session
+Use bs_apply_role(session_id, "copilot", "security-reviewer")
+Use bs_apply_role(session_id, "gemini", "architecture-analyst")
+
+# Refine over time
+Use bs_update_role("security-reviewer", notes="Works best when combined with code-verifier on copilot")
+
+# Create custom roles
+Use bs_create_role(slug="api-reviewer", display_name="API Reviewer", ...)
+```
+
+8 seed templates included: `code-reviewer`, `security-reviewer`, `architecture-analyst`, `performance-analyst`, `ux-design-critic`, `devil-advocate`, `copilot-code-verifier`, `gemini-research-analyst`.
+
+Templates track usage counts and can be agent-specific or generic (any agent).
 
 ## License
 

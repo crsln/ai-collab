@@ -155,8 +155,8 @@ def main():
             result = db.save_consensus(args.session_id, content, args.round_id)
 
         elif args.command == "seed-defaults":
-            from brainstorm_seeds import AGENT_DEFINITIONS, WORKFLOW_TEMPLATES, TOOL_GUIDES
-            counts = {"agents": 0, "workflows": 0, "tools": 0}
+            from brainstorm_seeds import AGENT_DEFINITIONS, WORKFLOW_TEMPLATES, TOOL_GUIDES, ROLE_TEMPLATES
+            counts = {"agents": 0, "workflows": 0, "tools": 0, "roles": 0}
             for defn in AGENT_DEFINITIONS:
                 db.upsert_agent_definition(**defn)
                 counts["agents"] += 1
@@ -172,6 +172,11 @@ def main():
             for guide in TOOL_GUIDES:
                 db.upsert_tool_guide(**guide)
                 counts["tools"] += 1
+            for role in ROLE_TEMPLATES:
+                existing = db.get_role_template(role["slug"])
+                if not existing:
+                    db.create_role_template(**role)
+                    counts["roles"] += 1
             result = {"seeded": counts, "status": "ok"}
 
         elif args.command == "get-onboarding":
