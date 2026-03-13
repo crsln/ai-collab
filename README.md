@@ -168,7 +168,11 @@ See `ai-collab.toml.example` for more examples including Codex, Aider, and custo
 
 ## Self-Describing Database
 
-The brainstorm database is self-describing. Agent definitions, workflow templates, tool guides, and role templates are stored in global tables. Agents call `bs_get_onboarding(agent_name)` to discover everything they need.
+The brainstorm database is self-describing. Agent definitions, workflow templates, tool guides, and role templates are stored in global tables. Agents call `bs_get_onboarding(agent_name)` to discover everything they need — including their task for the current round.
+
+### Pure ID-Based Prompts
+
+Agent dispatch prompts contain only IDs (~150 chars): agent name, session/round IDs, and a bootstrap instruction. The question is stored in the `rounds` table and retrieved by agents via `bs_get_onboarding()` (in the `task` field). This eliminates prompt bloat and Windows stdin piping issues.
 
 Seed defaults:
 ```bash

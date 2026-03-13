@@ -85,10 +85,14 @@ the MCP server process happens to be in, not the target project.
 | `bs_apply_role(session_id, agent_name, slug)` | Apply role template to session |
 | `bs_update_role(slug, ...)` | Refine a role template |
 
-### Self-Describing DB
+### Self-Describing DB (Pure ID-Based Prompts)
 
 Agent definitions, workflow templates, tool guides, and role templates are stored in the DB.
 Agents call `bs_get_onboarding(agent_name)` to discover everything they need.
+
+Agent dispatch prompts are **pure ID-based** (~150 chars): just the agent name, session/round IDs,
+and a bootstrap instruction to call `bs_get_onboarding()`. The question itself is stored in the
+`rounds` table and delivered to agents as part of the onboarding response (`task.question`).
 
 Seed defaults: `python brainstorm_cli.py seed-defaults`
 

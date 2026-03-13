@@ -71,17 +71,19 @@ def bs_complete_session(session_id: str) -> str:
 # -- Round tools --
 
 @mcp.tool()
-def bs_new_round(session_id: str, objective: str | None = None) -> str:
+def bs_new_round(session_id: str, objective: str | None = None, question: str | None = None) -> str:
     """Start a new round in a brainstorming session. Round number auto-increments.
 
     Args:
         session_id: The session this round belongs to.
         objective: What this round should focus on.
+        question: The question/task for agents this round. Stored in DB and
+                  delivered to agents via bs_get_onboarding (pull model).
 
     Returns:
         Round info with ID and round number.
     """
-    result = _db.create_round(session_id, objective)
+    result = _db.create_round(session_id, objective, question=question)
     return json.dumps(result, indent=2)
 
 

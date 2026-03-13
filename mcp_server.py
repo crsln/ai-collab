@@ -253,14 +253,16 @@ def bs_complete_session(session_id: str) -> str:
 
 
 @mcp.tool()
-def bs_new_round(session_id: str, objective: str | None = None) -> str:
+def bs_new_round(session_id: str, objective: str | None = None, question: str | None = None) -> str:
     """Start a new round in a brainstorming session. Round number auto-increments.
 
     Args:
         session_id: The session this round belongs to.
         objective: What this round should focus on.
+        question: The question/task for agents this round. Stored in DB and
+                  delivered to agents via bs_get_onboarding (pull model).
     """
-    return json.dumps(_db.create_round(session_id, objective), indent=2)
+    return json.dumps(_db.create_round(session_id, objective, question=question), indent=2)
 
 
 @mcp.tool()
@@ -348,28 +350,18 @@ def _build_round_prompt(
     session_id: str,
     round_id: str,
     agent_name: str,
-    question: str,
 ) -> str:
-    """Build a context-rich prompt for an agent in a brainstorm round.
+    """Build a pure ID-based prompt for an agent in a brainstorm round.
 
-    Agents MUST call bs_get_onboarding() to self-discover their role,
-    workflow, and tool guides.
+    The prompt contains only IDs and a bootstrap instruction. The agent
+    retrieves everything (task, role, workflow, context) from the DB
+    via bs_get_onboarding().
     """
-    session = _db.get_session(session_id)
-    if not session:
-        return question
-
-    parts = [
-        f"You are '{agent_name}' in brainstorm session {session_id}, round {round_id}.",
-        "",
-        "MANDATORY FIRST STEP: Call bs_get_onboarding(agent_name='"
-        f"{agent_name}', session_id='{session_id}', round_id='{round_id}') to get your"
-        " identity, role, workflow, current phase, and tools. Do this BEFORE anything else.",
-        "",
-        question,
-    ]
-
-    return "\n".join(parts)
+    return (
+        f"You are '{agent_name}'. Session: {session_id}, Round: {round_id}.\n"
+        f"Call bs_get_onboarding(agent_name='{agent_name}', session_id='{session_id}', "
+        f"round_id='{round_id}') to get your task, role, and instructions."
+    )
 
 
 @mcp.tool()
@@ -401,18 +393,18 @@ async def bs_run_round(
 
     total_steps = len(agent_list) + 1
 
-    # 1. Create the round
-    round_info = _db.create_round(session_id, objective)
+    # 1. Create the round (question stored in DB for agent retrieval via onboarding)
+    round_info = _db.create_round(session_id, objective, question=question)
     round_id = round_info["id"]
     round_num = round_info["round_number"]
     if ctx:
         await ctx.report_progress(1, total_steps)
         await ctx.info(f"Round {round_num} created. Dispatching to {len(agent_list)} agents...")
 
-    # 2. Build per-agent prompts and dispatch in parallel
+    # 2. Build per-agent prompts (pure IDs) and dispatch in parallel
     tasks = {}
     for agent_name in agent_list:
-        prompt = _build_round_prompt(session_id, round_id, agent_name, question)
+        prompt = _build_round_prompt(session_id, round_id, agent_name)
         tasks[agent_name] = _run_agent(agent_name, prompt, cwd=cwd)
 
     # Run agents in parallel, report progress as each completes

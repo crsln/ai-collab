@@ -46,6 +46,7 @@ class BrainstormDB:
                 session_id TEXT NOT NULL,
                 round_number INTEGER NOT NULL,
                 objective TEXT,
+                question TEXT,
                 created_at TEXT NOT NULL,
                 FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
                 UNIQUE (session_id, round_number)
@@ -183,6 +184,11 @@ class BrainstormDB:
             self._conn.execute("ALTER TABLE sessions ADD COLUMN context TEXT")
             self._conn.commit()
 
+        round_cols = {r[1] for r in self._conn.execute("PRAGMA table_info(rounds)").fetchall()}
+        if "question" not in round_cols:
+            self._conn.execute("ALTER TABLE rounds ADD COLUMN question TEXT")
+            self._conn.commit()
+
     # -- Sessions --
 
     def create_session(self, topic: str, project: str | None = None) -> dict:
@@ -234,14 +240,14 @@ class BrainstormDB:
 
     # -- Rounds --
 
-    def create_round(self, session_id: str, objective: str | None = None) -> dict:
+    def create_round(self, session_id: str, objective: str | None = None, question: str | None = None) -> dict:
         rid = f"r_{_uid()}"
         now = _now()
         # Atomic INSERT with subquery to avoid TOCTOU race on round_number
         self._conn.execute(
-            "INSERT INTO rounds (id, session_id, round_number, objective, created_at)"
-            " VALUES (?, ?, (SELECT COALESCE(MAX(round_number), 0) + 1 FROM rounds WHERE session_id = ?), ?, ?)",
-            (rid, session_id, session_id, objective, now),
+            "INSERT INTO rounds (id, session_id, round_number, objective, question, created_at)"
+            " VALUES (?, ?, (SELECT COALESCE(MAX(round_number), 0) + 1 FROM rounds WHERE session_id = ?), ?, ?, ?)",
+            (rid, session_id, session_id, objective, question, now),
         )
         self._conn.commit()
         row = self._conn.execute("SELECT round_number FROM rounds WHERE id = ?", (rid,)).fetchone()
@@ -770,10 +776,22 @@ class BrainstormDB:
             else:
                 current_phase = "analysis"
 
+        # Task from round (question + objective)
+        task = None
+        if round_id:
+            rnd = self.get_round(round_id)
+            if rnd:
+                task = {}
+                if rnd.get("objective"):
+                    task["objective"] = rnd["objective"]
+                if rnd.get("question"):
+                    task["question"] = rnd["question"]
+
         return {
             "your_identity": identity,
             "workflow": workflow,
             "tools": tool_list,
+            "task": task,
             "session_role": session_role,
             "session_context": session_context,
             "guidelines": guidelines_list,
