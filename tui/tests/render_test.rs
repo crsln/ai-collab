@@ -50,8 +50,8 @@ fn test_flow_art_row_count_3_agents() {
     ]
     .into();
     let lines = render_flow_art(&session, &color_map, 0);
-    // H = 2*3-1 = 5 rows
-    assert_eq!(lines.len(), 5);
+    // H = N = 3 rows (one per agent, no spacer rows)
+    assert_eq!(lines.len(), 3);
 }
 
 #[test]

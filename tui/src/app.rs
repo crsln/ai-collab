@@ -4,11 +4,11 @@ use std::path::PathBuf;
 use crate::db::{complete_session, poll_sessions, SessionData};
 
 /// Card height in terminal rows (including borders).
-/// = 2 (borders) + 1 (header) + 1 (meta) + (2*N-1) (flow rows)
-/// = 2*N + 3 where N = max(1, agent_count)
+/// = 2 (borders) + 1 (header) + 1 (meta) + N (flow rows)
+/// = N + 4 where N = max(1, agent_count)
 pub fn card_height(agent_count: usize) -> usize {
     let n = agent_count.max(1);
-    2 * n + 3
+    n + 4
 }
 
 pub struct AppState {

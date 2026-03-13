@@ -46,11 +46,13 @@ fn test_focus_next_wraps() {
 #[test]
 fn test_card_height_3_agents() {
     use ai_collab_tui::app::card_height;
-    assert_eq!(card_height(3), 9);
+    // 3 agents: 2 borders + 1 header + 1 meta + 3 flow rows = 7
+    assert_eq!(card_height(3), 7);
 }
 
 #[test]
 fn test_card_height_1_agent() {
     use ai_collab_tui::app::card_height;
+    // 1 agent: 2 borders + 1 header + 1 meta + 1 flow row = 5
     assert_eq!(card_height(1), 5);
 }

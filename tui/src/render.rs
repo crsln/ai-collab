@@ -1,8 +1,8 @@
-use ratatui::style::{Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap, HashSet};
 
-use crate::colors::{braille_frame, DIM, CYAN, MINT, AGENT_COLORS};
+use crate::colors::{braille_frame, AGENT_COLORS, CYAN, DIM, MINT};
 use crate::db::SessionData;
 
 // ── Summary extractor ────────────────────────────────────────────────────
@@ -13,7 +13,6 @@ pub fn extract_summary(content: &str) -> String {
         if ln.is_empty() {
             continue;
         }
-        // Skip lines starting with special chars
         let first = ln.chars().next().unwrap_or(' ');
         if "✓✗⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏⚠✘|┌┐└┘├┤┬┴┼─│[{".contains(first) {
             continue;
@@ -39,7 +38,7 @@ pub fn extract_summary(content: &str) -> String {
     "(no summary)".to_string()
 }
 
-// ── Flow art ─────────────────────────────────────────────────────────────
+// ── Span helpers ──────────────────────────────────────────────────────────
 
 fn dim(s: &str) -> Span<'static> {
     Span::styled(s.to_string(), Style::default().fg(DIM))
@@ -49,25 +48,25 @@ fn colored(s: &str, color: ratatui::style::Color) -> Span<'static> {
     Span::styled(s.to_string(), Style::default().fg(color))
 }
 
-/// Render the branching dot-graph for one session.
-/// Returns one `Line` per row (H = 2*N-1 for N agents).
+// ── Flow art ─────────────────────────────────────────────────────────────
+
+/// Render the session as a node graph growing left-to-right.
+/// One row per agent (H = N). No box-drawing characters.
 ///
-/// Layout (3 agents, 2 rounds):
-///   ╭── ● ── ● ──╮
-///   │             │
-/// ◉─┼── ● ── ⠋ ──┼── ◆ summary
-///   │             │
-///   ╰── ● ── ● ──╯
+/// 3 agents, 2 rounds, gemini pending:
+///   ◉ ─ ● ─ ●   (claude  — has ◉ start + ─ connectors)
+///       ●   ●   (copilot — dots aligned under columns)
+///       ●   ⠋  (gemini  — ⠋ spinner for pending)
 pub fn render_flow_art(
     session: &SessionData,
-    color_map: &HashMap<String, usize>, // agent_name → color index
+    color_map: &HashMap<String, usize>,
     frame: u32,
 ) -> Vec<Line<'static>> {
     let sp = braille_frame(frame);
     let rounds = &session.rounds;
 
     let all_agents: Vec<String> = {
-        let mut set: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        let mut set: BTreeSet<String> = BTreeSet::new();
         for (name, _) in color_map {
             set.insert(name.clone());
         }
@@ -89,12 +88,7 @@ pub fn render_flow_art(
         ])];
     }
 
-    let h = 2 * n - 1;
-    let center = n - 1; // index of middle row (H rows, 0-indexed)
-    let has_consensus = session.consensus_content.is_some();
-
-    // Precompute responded sets per round
-    let responded_sets: Vec<std::collections::HashSet<&str>> = rounds
+    let responded_sets: Vec<HashSet<&str>> = rounds
         .iter()
         .map(|r| {
             r.responses
@@ -105,109 +99,62 @@ pub fn render_flow_art(
         })
         .collect();
 
-    let mid_width = m + (m - 1) * 4; // M dots + (M-1) separators of " ── " (4 chars)
+    let has_consensus = session.consensus_content.is_some();
 
     let mut lines = vec![];
 
-    for row in 0..h {
-        let is_agent_row = row % 2 == 0;
-        let ai = row / 2;
-        let mut spans: Vec<Span<'static>> = vec![Span::raw("  ")]; // 2-space indent
+    for (ai, agent) in all_agents.iter().enumerate() {
+        let color_idx = color_map.get(agent).copied().unwrap_or(ai);
+        let color = AGENT_COLORS[color_idx % AGENT_COLORS.len()];
+        let is_first = ai == 0;
 
-        // ── LEFT (6 rendered chars) ──────────────────────────────────────
-        if n == 1 {
+        let mut spans: Vec<Span<'static>> = vec![];
+
+        // Start node or indent (1 char)
+        if is_first {
             spans.push(colored("◉", CYAN));
-            spans.push(dim("── "));
-        } else if row == 0 {
-            spans.push(dim("  ╭── "));
-        } else if row == h - 1 {
-            spans.push(dim("  ╰── "));
-        } else if is_agent_row && row == center {
-            spans.push(colored("◉", CYAN));
-            spans.push(dim("─┼── "));
-        } else if !is_agent_row && row == center {
-            spans.push(colored("◉", CYAN));
-            spans.push(dim("─┤   "));
-        } else if is_agent_row {
-            spans.push(dim("  ├── "));
         } else {
-            spans.push(dim("  │   "));
+            spans.push(Span::raw(" "));
         }
 
-        // ── MIDDLE (rounds as columns) ───────────────────────────────────
-        if is_agent_row {
-            let agent = &all_agents[ai];
-            let color_idx = color_map.get(agent).copied().unwrap_or(0);
-            let color = AGENT_COLORS[color_idx % AGENT_COLORS.len()];
+        // Round columns
+        for (ri, responded) in responded_sets.iter().enumerate() {
+            // Connector (3 chars): ` ─ ` on row 0, `   ` on others
+            if is_first {
+                spans.push(dim(" ─ "));
+            } else {
+                spans.push(Span::raw("   "));
+            }
 
-            for (ri, responded) in responded_sets.iter().enumerate() {
-                let dot = if responded.contains(agent.as_str()) {
-                    "●"
-                } else if session.is_running && ri == m - 1 {
-                    // Push dynamic braille spinner span and continue
-                    spans.push(Span::styled(
-                        sp.to_string(),
-                        Style::default().fg(color),
-                    ));
-                    if ri < m - 1 {
-                        spans.push(dim(" ── "));
-                    }
-                    continue;
+            // Dot (1 char)
+            if responded.contains(agent.as_str()) {
+                spans.push(colored("●", color));
+            } else if session.is_running && ri == m - 1 {
+                spans.push(Span::styled(
+                    sp.to_string(),
+                    Style::default().fg(color),
+                ));
+            } else {
+                spans.push(colored("○", color));
+            }
+        }
+
+        // Consensus / running tail (row 0 only)
+        if is_first {
+            if has_consensus {
+                let short =
+                    extract_summary(session.consensus_content.as_deref().unwrap_or(""));
+                let short = if short.len() > 40 {
+                    format!("{}…", &short[..40])
                 } else {
-                    "○"
+                    short
                 };
-                spans.push(colored(dot, color));
-                if ri < m - 1 {
-                    spans.push(dim(" ── "));
-                }
-            }
-        } else {
-            spans.push(Span::raw(" ".repeat(mid_width)));
-        }
-
-        // ── RIGHT (fan-in + consensus) ───────────────────────────────────
-        if n == 1 {
-            if has_consensus {
-                let short = extract_summary(session.consensus_content.as_deref().unwrap_or(""));
-                let short = if short.len() > 40 { format!("{}…", &short[..40]) } else { short };
-                spans.push(dim(" ── "));
+                spans.push(dim(" ─ "));
                 spans.push(colored("◆", MINT));
                 spans.push(dim(&format!(" {}", short)));
             } else if session.is_running {
-                spans.push(dim(&format!(" ── {}", sp)));
+                spans.push(dim(&format!(" ─ {}", sp)));
             }
-        } else if row == 0 {
-            spans.push(dim(" ──╮"));
-        } else if row == h - 1 {
-            spans.push(dim(" ──╯"));
-        } else if is_agent_row && row == center {
-            if has_consensus {
-                let short = extract_summary(session.consensus_content.as_deref().unwrap_or(""));
-                let short = if short.len() > 40 { format!("{}…", &short[..40]) } else { short };
-                spans.push(dim(" ──┼── "));
-                spans.push(colored("◆", MINT));
-                spans.push(dim(&format!(" {}", short)));
-            } else if session.is_running {
-                spans.push(dim(&format!(" ──┼── {}", sp)));
-            } else {
-                spans.push(dim(" ──┤"));
-            }
-        } else if !is_agent_row && row == center {
-            if has_consensus {
-                let short = extract_summary(session.consensus_content.as_deref().unwrap_or(""));
-                let short = if short.len() > 40 { format!("{}…", &short[..40]) } else { short };
-                spans.push(dim(" ──┤ "));
-                spans.push(colored("◆", MINT));
-                spans.push(dim(&format!(" {}", short)));
-            } else if session.is_running {
-                spans.push(dim(&format!(" ──┤ {}", sp)));
-            } else {
-                spans.push(dim(" ──┤"));
-            }
-        } else if is_agent_row {
-            spans.push(dim(" ──┤"));
-        } else {
-            spans.push(dim("   │"));
         }
 
         lines.push(Line::from(spans));
