@@ -40,9 +40,13 @@ toml = "0.8"
 dirs = "6"
 clap = { version = "4", features = ["derive"] }
 
+# MCP
+rmcp = { version = "1.2", features = ["server", "transport-io", "macros"] }
+schemars = "1"
+
 # Logging
 tracing = "0.1"
-tracing-subscriber = "0.3"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Internal crates
 ai-collab-core = { path = "crates/ai-collab-core" }
