@@ -189,7 +189,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         body = json.dumps(data, default=str).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Origin", f"http://localhost:{_port}")
         self.end_headers()
         self.wfile.write(body)
 
@@ -223,7 +223,7 @@ def main(port: int | None = None, db_path: str | None = None):
     print(f"Dashboard: http://localhost:{_port}")
     print(f"Database:  {DB_PATH}")
 
-    server = HTTPServer(("0.0.0.0", _port), DashboardHandler)
+    server = HTTPServer(("127.0.0.1", _port), DashboardHandler)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
