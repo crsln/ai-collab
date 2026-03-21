@@ -1,0 +1,17 @@
+[package]
+name = "ai-collab-server"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ai-collab-core = { workspace = true }
+ai-collab-config = { workspace = true }
+ai-collab-db = { workspace = true }
+ai-collab-provider = { workspace = true }
+clap = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

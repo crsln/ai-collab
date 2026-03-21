@@ -1,0 +1,11 @@
+[package]
+name = "ai-collab-config"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ai-collab-core = { workspace = true }
+serde = { workspace = true }
+toml = { workspace = true }
+dirs = { workspace = true }
+thiserror = { workspace = true }
