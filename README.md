@@ -10,6 +10,10 @@ Multi-AI collaboration MCP server for Claude Code. Orchestrate brainstorming ses
 
 ai-collab lets Claude Code delegate questions to other AI agents and run structured multi-agent brainstorming sessions with a 3-phase workflow:
 
+<p align="center">
+  <img src="workflow.png" alt="3-Phase Brainstorm Workflow" width="600">
+</p>
+
 1. **Independent Analysis** — Each agent analyzes the topic independently
 2. **Deliberation** — Agents review findings and vote (accept/reject/modify) with evidence
 3. **Consolidation** — Claude synthesizes a final consensus
@@ -133,9 +137,17 @@ Use list_agents()
 
 ### Structured Brainstorming
 
+<p align="center">
+  <img src="dispatch.png" alt="Agent Dispatch" width="600">
+</p>
+
 Use the `/multi-ai-brainstorm` skill for full 3-phase brainstorming sessions. See the skill documentation for the complete workflow.
 
 ## Architecture
+
+<p align="center">
+  <img src="architecture.png" alt="Architecture" width="600">
+</p>
 
 > **Note:** ai-collab is an MCP server, not a CLI tool. The `providers/` directory contains
 > internal subprocess adapters — they dispatch prompts to agent CLIs on behalf of `mcp_server.py`.
