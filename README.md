@@ -68,6 +68,12 @@ Add to your Claude Code MCP settings (`.claude/settings.json` or global settings
 }
 ```
 
+> **Windows:** Use the full path to your Python executable instead of `"python"`:
+> ```json
+> "command": "C:/Users/YOU/AppData/Local/Programs/Python/Python312/python.exe"
+> ```
+> Use forward slashes in all paths. The setup wizard (`ai-collab init`) generates the correct paths automatically.
+
 ### Configure Agent MCP Access
 
 Each AI agent needs its own MCP server instance for brainstorm tools. The setup wizard generates config snippets for each agent. Examples:
