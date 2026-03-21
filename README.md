@@ -1,5 +1,9 @@
 # ai-collab
 
+<p align="center">
+  <img src="banner.png" alt="ai-collab banner" width="600">
+</p>
+
 Multi-AI collaboration MCP server for Claude Code. Orchestrate brainstorming sessions across any combination of AI CLI agents — GitHub Copilot, Google Gemini, OpenAI Codex, or any custom CLI tool.
 
 ## What it does
