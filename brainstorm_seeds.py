@@ -71,33 +71,30 @@ AGENT_DEFINITIONS = [
     },
     {
         "agent_name": "claude",
-        "display_name": "Claude (Orchestrator)",
+        "display_name": "Claude (Peer Agent)",
         "capabilities": (
-            "Orchestrator and synthesizer. Creates sessions, manages rounds, extracts feedback "
-            "items from agent responses, drives convergence, and writes final consensus documents. "
-            "Has direct DB access via CLI. Best at: complex reasoning, synthesis across multiple "
-            "perspectives, making final judgment calls."
+            "Peer agent dispatched in parallel alongside other agents. Strong at complex reasoning, "
+            "synthesis across multiple perspectives, nuanced analysis, and deep domain knowledge. "
+            "Has access to MCP tools (brainstorm + atlas). When participating in brainstorm rounds, "
+            "Claude is a 3rd parallel agent — NOT privileged, NOT the orchestrator."
         ),
         "default_role": (
-            "Orchestrator and final arbiter. Synthesize perspectives from all agents into "
-            "coherent consensus. Make judgment calls on contested items after max rounds. "
-            "Ensure the final document is actionable and complete."
+            "Analytical peer. Provide thorough, evidence-based analysis from your assigned role "
+            "perspective. Do not orchestrate or meta-comment on the workflow — focus on the task. "
+            "Cite sources and be specific. Challenge weak assumptions."
         ),
         "approach": (
-            "Coordinate the overall workflow. Extract clear feedback items from Phase 1 responses. "
-            "Drive deliberation toward convergence. Synthesize final consensus that captures the "
-            "best insights from all agents. Be decisive on contested items."
+            "Focus on the assigned role and task scope. Provide deep analysis, not workflow "
+            "coordination. Be decisive and concrete. Save your response via bs_save_response "
+            "or submit verdicts via bs_respond_to_feedback as instructed."
         ),
-        "vision": "Convergence to high-quality actionable consensus",
-        "angle": "Synthesis and arbitration",
+        "vision": "Deep, nuanced analysis that complements other models' perspectives",
+        "angle": "Thorough reasoner with strong synthesis skills",
         "behavior": (
-            "Coordinate workflow. Extract clear feedback items. Be decisive on contested items. "
-            "When not orchestrating, act as a synthesis and arbitration agent — extract clear "
-            "feedback items, be decisive on contested points, and converge toward actionable "
-            "consensus. In non-orchestrator roles, focus on the assigned task scope and avoid "
-            "meta-commentary on the workflow."
+            "Focus on the assigned task scope. Do NOT orchestrate or meta-comment on the workflow. "
+            "Provide analysis, verdicts, and insights as a peer participant. Be concrete and specific."
         ),
-        "tags": ["orchestrator", "synthesis", "consensus"],
+        "tags": ["analysis", "reasoning", "synthesis"],
         "backend_hint": "claude",
     },
     {
@@ -160,9 +157,8 @@ WORKFLOW_TEMPLATES = [
                     "1. Call bs_list_feedback(session_id) to see all items to review.\n"
                     "2. For each item, call bs_get_feedback(item_id) to read details and existing verdicts.\n"
                     "3. Read source code to verify claims made in the feedback.\n"
-                    "4. Call bs_respond_to_feedback(item_id, round_id, agent_name, verdict, reasoning) "
-                    "for each item.\n"
-                    "5. Do ALL items. If a tool fails, skip and move on."
+                    "4. Call bs_batch_respond(round_id, agent_name, verdicts=JSON array) to submit ALL verdicts in one call.\n"
+                    "5. If bs_batch_respond fails, fall back to bs_respond_to_feedback per item."
                 ),
                 "expected_outputs": (
                     "A verdict (accept/reject/modify) with evidence-based reasoning for every "
@@ -175,9 +171,10 @@ WORKFLOW_TEMPLATES = [
                     "1. Call bs_list_feedback(session_id='{session_id}') to see all items\n"
                     "2. For EACH item, call bs_get_feedback(item_id=<id>) to read the full "
                     "content and all agents' prior verdicts\n"
-                    "3. For EACH item, call bs_respond_to_feedback(item_id=<id>, "
+                    "3. Submit ALL verdicts in ONE call using bs_batch_respond("
                     "round_id='{round_id}', agent_name='{agent_name}', "
-                    "verdict='accept' or 'reject' or 'modify', reasoning='your reasoning')\n"
+                    "verdicts='[{{\"item_id\":\"<id>\",\"verdict\":\"accept|reject|modify\","
+                    "\"reasoning\":\"your reasoning\"}},...])'\n"
                     "4. Call bs_save_response(round_id='{round_id}', "
                     "agent_name='{agent_name}', content='summary of your verdicts')\n"
                     "\nFeedback item IDs: {feedback_item_ids}"
@@ -390,7 +387,7 @@ ROLE_TEMPLATES = [
         "slug": "code-verifier",
         "display_name": "Code Verifier",
         "agent_name": None,
-        "description": "Copilot-specific: verify claims by reading code, grep for evidence.",
+        "description": "Verify claims by reading code, grep for evidence. Works with any agent.",
         "role_text": (
             "Code verifier. Your strength is reading code and running grep/find. For every "
             "claim or finding from other agents, verify it by reading the actual source code. "
@@ -418,7 +415,7 @@ ROLE_TEMPLATES = [
         "slug": "research-analyst",
         "display_name": "Research Analyst",
         "agent_name": None,
-        "description": "Gemini-specific: research alternatives, compare with industry patterns.",
+        "description": "Research alternatives, compare with industry patterns. Works with any agent.",
         "role_text": (
             "Research analyst. Leverage your broad knowledge to compare the proposal against "
             "industry best practices, alternative libraries/frameworks, and published patterns. "
@@ -800,8 +797,14 @@ TOOL_GUIDES = [
     {
         "tool_name": "bs_respond_to_feedback",
         "phase": "phase2",
-        "purpose": "Submit your verdict on a feedback item. Must include evidence-based reasoning.",
+        "purpose": "Submit your verdict on a single feedback item. Prefer bs_batch_respond for multiple items.",
         "usage": "bs_respond_to_feedback(item_id='fb_xxx', round_id='r_xxx', agent_name='copilot', verdict='accept|reject|modify', reasoning='Evidence-based explanation with file paths')",
+    },
+    {
+        "tool_name": "bs_batch_respond",
+        "phase": "phase2",
+        "purpose": "Submit verdicts on ALL feedback items in one call. Preferred over calling bs_respond_to_feedback per item.",
+        "usage": "bs_batch_respond(round_id='r_xxx', agent_name='copilot', verdicts='[{\"item_id\":\"fb_xxx\",\"verdict\":\"accept\",\"reasoning\":\"...\"},{\"item_id\":\"fb_yyy\",\"verdict\":\"modify\",\"reasoning\":\"...\"}]')",
     },
     {
         "tool_name": "bs_update_feedback_status",
@@ -832,5 +835,23 @@ TOOL_GUIDES = [
         "phase": "any",
         "purpose": "List all tool guides, optionally filtered by phase. Useful to see what tools are available for a specific phase.",
         "usage": "bs_list_tool_guides(). Optional: phase='phase2' to filter.",
+    },
+    {
+        "tool_name": "bs_check_round_status",
+        "phase": "any",
+        "purpose": "Check if all agents have valid responses for a round. Returns completion gate status with per-agent quality details. Orchestrator uses this to enforce fail-fast — round cannot proceed unless all agents responded validly.",
+        "usage": "bs_check_round_status(round_id='r_xxx'). Returns {complete: bool, total, responded, failed, agents: {...}}.",
+    },
+    {
+        "tool_name": "bs_check_feedback_status",
+        "phase": "phase2",
+        "purpose": "Check if all agents voted on all feedback items. Returns vote completeness matrix. Orchestrator uses this to block phase transitions until all votes are in.",
+        "usage": "bs_check_feedback_status(round_id='r_xxx', session_id='bs_xxx'). Returns {complete: bool, agents: {...}, items: {...}}.",
+    },
+    {
+        "tool_name": "bs_retry_agent",
+        "phase": "any",
+        "purpose": "Retry a failed or timed-out agent in an existing round. Re-dispatches the agent and re-checks the completion gate.",
+        "usage": "bs_retry_agent(round_id='r_xxx', agent_name='gemini', cwd='/path/to/project'). Returns retry result with gate status.",
     },
 ]

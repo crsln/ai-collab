@@ -33,6 +33,7 @@ import sys
 from pathlib import Path
 
 from brainstorm_db import BrainstormDB
+from brainstorm_service import BrainstormService
 
 _DB_PATH = Path(__file__).parent / ".data" / "brainstorm.db"
 
@@ -112,6 +113,7 @@ def main():
 
     args = parser.parse_args()
     db = BrainstormDB(args.db)
+    svc = BrainstormService(db)
 
     try:
         if args.command == "list-sessions":
@@ -199,7 +201,7 @@ def main():
             result = {"seeded": counts, "status": "ok"}
 
         elif args.command == "get-onboarding":
-            result = db.get_onboarding_briefing(args.agent, args.session_id)
+            result = svc.get_onboarding_briefing(args.agent, args.session_id)
 
         print(json.dumps(result, indent=2))
     finally:

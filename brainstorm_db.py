@@ -179,6 +179,25 @@ class BrainstormDB:
                 updated_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS round_participants (
+                id TEXT PRIMARY KEY,
+                round_id TEXT NOT NULL,
+                agent_name TEXT NOT NULL,
+                phase TEXT NOT NULL DEFAULT 'analysis',
+                status TEXT NOT NULL DEFAULT 'pending',
+                dispatched_at TEXT,
+                responded_at TEXT,
+                response_quality TEXT,
+                error_detail TEXT,
+                retry_count INTEGER DEFAULT 0,
+                max_retries INTEGER DEFAULT 1,
+                feedback_items_expected INTEGER DEFAULT 0,
+                feedback_items_completed INTEGER DEFAULT 0,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (round_id) REFERENCES rounds(id) ON DELETE CASCADE,
+                UNIQUE (round_id, agent_name)
+            );
+
             CREATE INDEX IF NOT EXISTS idx_role_library_agent ON role_library(agent_name);
             CREATE INDEX IF NOT EXISTS idx_role_library_slug ON role_library(slug);
             CREATE INDEX IF NOT EXISTS idx_rounds_session ON rounds(session_id);
@@ -187,6 +206,8 @@ class BrainstormDB:
             CREATE INDEX IF NOT EXISTS idx_feedback_session ON feedback_items(session_id);
             CREATE INDEX IF NOT EXISTS idx_feedback_responses_item ON feedback_responses(item_id);
             CREATE INDEX IF NOT EXISTS idx_guidelines_session ON guidelines(session_id);
+            CREATE INDEX IF NOT EXISTS idx_rp_round ON round_participants(round_id);
+            CREATE INDEX IF NOT EXISTS idx_rp_status ON round_participants(round_id, status);
         """)
 
     def _migrate(self):
@@ -227,6 +248,20 @@ class BrainstormDB:
         ar_cols = {r[1] for r in self._conn.execute("PRAGMA table_info(agent_roles)").fetchall()}
         if "source_slug" not in ar_cols:
             self._conn.execute("ALTER TABLE agent_roles ADD COLUMN source_slug TEXT")
+            self._conn.commit()
+
+        # Sync barrier: new columns on rounds
+        round_cols2 = {r[1] for r in self._conn.execute("PRAGMA table_info(rounds)").fetchall()}
+        if "phase" not in round_cols2:
+            self._conn.execute("ALTER TABLE rounds ADD COLUMN phase TEXT DEFAULT 'analysis'")
+            self._conn.execute("ALTER TABLE rounds ADD COLUMN completed_at TEXT")
+            self._conn.commit()
+
+        # Sync barrier: new columns on responses
+        resp_cols = {r[1] for r in self._conn.execute("PRAGMA table_info(responses)").fetchall()}
+        if "quality" not in resp_cols:
+            self._conn.execute("ALTER TABLE responses ADD COLUMN quality TEXT")
+            self._conn.execute("ALTER TABLE responses ADD COLUMN source TEXT DEFAULT 'stdout'")
             self._conn.commit()
 
     # -- Sessions --
@@ -336,6 +371,22 @@ class BrainstormDB:
         ).fetchall()
         return [dict(r) for r in rows]
 
+    def get_agent_session_responses(self, session_id: str, agent_name: str) -> list[dict]:
+        """Fetch prior response references for an agent across all rounds in a session.
+
+        NOTE: Orchestration wrapper moved to brainstorm_service.BrainstormService.
+        This CRUD method is kept as the data-access layer.
+        """
+        rows = self._conn.execute(
+            """SELECT rd.id AS round_id, rd.round_number, rd.phase, rd.objective
+               FROM responses r
+               JOIN rounds rd ON r.round_id = rd.id
+               WHERE rd.session_id = ? AND r.agent_name = ?
+               ORDER BY rd.round_number""",
+            (session_id, agent_name),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
     # -- Consensus --
 
     def save_consensus(self, session_id: str, content: str, round_id: str | None = None) -> dict:
@@ -420,6 +471,14 @@ class BrainstormDB:
             " verdict=excluded.verdict, reasoning=excluded.reasoning, created_at=excluded.created_at",
             (rid, item_id, round_id, agent_name, verdict, reasoning, now),
         )
+        # Update feedback_items_completed counter on round_participants
+        self._conn.execute(
+            "UPDATE round_participants SET feedback_items_completed = ("
+            "  SELECT COUNT(DISTINCT fr.item_id) FROM feedback_responses fr"
+            "  WHERE fr.round_id = ? AND fr.agent_name = ?"
+            ") WHERE round_id = ? AND agent_name = ?",
+            (round_id, agent_name, round_id, agent_name),
+        )
         self._conn.commit()
         row = self._conn.execute(
             "SELECT id FROM feedback_responses WHERE item_id = ? AND round_id = ? AND agent_name = ?",
@@ -427,6 +486,73 @@ class BrainstormDB:
         ).fetchone()
         return {"id": row["id"], "item_id": item_id, "agent_name": agent_name,
                 "verdict": verdict, "created_at": now}
+
+    def batch_save_feedback_responses(
+        self, round_id: str, agent_name: str,
+        verdicts: list[dict],
+    ) -> list[dict]:
+        """Save multiple feedback verdicts in a single transaction.
+
+        Each entry in verdicts: {"item_id": str, "verdict": str, "reasoning": str}
+        """
+        results = []
+        now = _now()
+        for v in verdicts:
+            rid = f"fbr_{_uid()}"
+            self._conn.execute(
+                "INSERT INTO feedback_responses"
+                " (id, item_id, round_id, agent_name, verdict, reasoning, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)"
+                " ON CONFLICT(item_id, round_id, agent_name) DO UPDATE SET"
+                " verdict=excluded.verdict, reasoning=excluded.reasoning, created_at=excluded.created_at",
+                (rid, v["item_id"], round_id, agent_name, v["verdict"], v["reasoning"], now),
+            )
+            results.append({"id": rid, "item_id": v["item_id"], "verdict": v["verdict"]})
+        # Update feedback_items_completed counter once
+        self._conn.execute(
+            "UPDATE round_participants SET feedback_items_completed = ("
+            "  SELECT COUNT(DISTINCT fr.item_id) FROM feedback_responses fr"
+            "  WHERE fr.round_id = ? AND fr.agent_name = ?"
+            ") WHERE round_id = ? AND agent_name = ?",
+            (round_id, agent_name, round_id, agent_name),
+        )
+        self._conn.commit()
+        return results
+
+    def batch_create_feedback_items(
+        self, session_id: str, items: list[dict],
+    ) -> list[dict]:
+        """Create multiple feedback items in a single transaction.
+
+        Each entry: {"source_round_id": str, "source_agent": str, "title": str, "content": str}
+        """
+        results = []
+        now = _now()
+        for item in items:
+            fid = f"fb_{_uid()}"
+            self._conn.execute(
+                "INSERT INTO feedback_items (id, session_id, source_round_id, source_agent, title, content, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (fid, session_id, item["source_round_id"], item["source_agent"],
+                 item["title"], item["content"], now),
+            )
+            results.append({"id": fid, "title": item["title"], "source_agent": item["source_agent"]})
+        self._conn.commit()
+        return results
+
+    def batch_apply_role_templates(
+        self, session_id: str, assignments: list[dict],
+    ) -> list[dict]:
+        """Apply role templates to multiple agents in a single transaction.
+
+        Each entry: {"agent_name": str, "slug": str}
+        """
+        results = []
+        for a in assignments:
+            result = self.apply_role_template(session_id, a["agent_name"], a["slug"])
+            if result:
+                results.append(result)
+        return results
 
     def get_feedback_responses(self, item_id: str) -> list[dict]:
         rows = self._conn.execute(
@@ -686,13 +812,21 @@ class BrainstormDB:
             results.append(d)
         return results
 
-    def suggest_roles(self, topic: str, agent_names: list[str], top_n: int = 6) -> dict:
+    def suggest_roles(self, topic: str, agent_names: list[str], top_n: int = 6,
+                      diversify: bool = False) -> dict:
         """Score role templates against a topic and suggest per-agent assignments.
+
+        Roles are NOT fixed to models. The recommended pattern is role rotation:
+        each round, ALL agents get the SAME role. Rotate the role each round so
+        every model covers every perspective. Use top_roles ranking to pick which
+        roles to rotate through.
 
         Args:
             topic: The brainstorm topic/question.
             agent_names: List of agent names to generate per-agent suggestions for.
             top_n: Number of top roles to return.
+            diversify: If True, each slug can only be assigned once; forces unique
+                roles per agent. Default False — all agents get the same top role.
 
         Returns:
             Dict with 'topic', 'top_roles' (ranked list), and 'assignments' (per-agent suggestions).
@@ -800,8 +934,9 @@ class BrainstormDB:
                 else:
                     c_score = 0.0
 
-                diversity_penalty = 0.2 if slug in assigned_slugs else 0.0
-                combined = t_score + c_score - diversity_penalty
+                if diversify and slug in assigned_slugs:
+                    continue  # hard skip — slug already taken
+                combined = t_score + c_score
 
                 if combined > best_combined:
                     best_combined = combined
@@ -935,164 +1070,7 @@ class BrainstormDB:
             "applied": True,
         }
 
-    # -- Onboarding (composite) --
-
-    def get_onboarding_briefing(
-        self, agent_name: str, session_id: str | None = None,
-        round_id: str | None = None,
-    ) -> dict:
-        """Build full onboarding response: identity + workflow + tools + optional session context.
-
-        Phase-aware: when feedback items exist for the session, includes current_phase='deliberation'
-        with explicit instructions and feedback item IDs so agents know they must vote, not analyze.
-        """
-        import json as _json
-
-        # Agent identity
-        defn = self.get_agent_definition(agent_name)
-        identity = None
-        if defn:
-            identity = {
-                "agent_name": defn["agent_name"],
-                "display_name": defn["display_name"],
-                "capabilities": defn["capabilities"],
-                "default_role": defn["default_role"],
-                "approach": defn["approach"],
-                "vision": defn.get("vision"),
-                "angle": defn.get("angle"),
-                "behavior": defn.get("behavior"),
-                "tags": defn.get("tags") or [],
-            }
-
-        # Workflow
-        wf = self.get_workflow_template("brainstorm_3phase")
-        workflow = None
-        if wf:
-            workflow = {
-                "name": wf["name"],
-                "overview": wf["overview"],
-                "phases": _json.loads(wf["phases"]),
-                "convergence_rules": wf["convergence_rules"],
-                "response_format": wf["response_format"],
-            }
-
-        # Tool guides
-        tools = self.list_tool_guides()
-        tool_list = [
-            {"tool_name": t["tool_name"], "phase": t["phase"],
-             "purpose": t["purpose"], "usage": t["usage"]}
-            for t in tools
-        ]
-
-        # Session-scoped data (if session_id provided)
-        session_role = None
-        session_context = None
-        session_role_detail = None
-        guidelines_list = []
-        current_phase = None
-        phase_instructions = None
-        feedback_item_ids = []
-
-        if session_id:
-            context = self.get_context(session_id)
-            session_context = context
-
-            role_row = self.get_role(session_id, agent_name)
-            if role_row:
-                session_role = role_row["role"]
-                if role_row.get("source_slug"):
-                    tmpl = self.get_role_template(role_row["source_slug"])
-                    if tmpl:
-                        session_role_detail = {
-                            "vision": tmpl.get("vision"),
-                            "angle": tmpl.get("angle"),
-                            "behavior": tmpl.get("behavior"),
-                            "mandates": tmpl.get("mandates") or [],
-                        }
-            elif defn:
-                session_role = defn["default_role"]
-
-            guidelines = self.list_guidelines(session_id)
-            guidelines_list = [g["content"] for g in guidelines]
-
-            # Phase detection: feedback items exist → deliberation mode
-            feedback_items = self.list_feedback_items(session_id)
-            if feedback_items:
-                current_phase = "deliberation"
-                feedback_item_ids = [item["id"] for item in feedback_items]
-                round_ref = f", round_id='{round_id}'" if round_id else ""
-                # DB-driven phase instructions (from workflow template)
-                phases = _json.loads(wf["phases"]) if wf else []
-                current_phase_def = next(
-                    (p for p in phases if "deliberation" in p.get("name", "").lower()), None
-                )
-                if current_phase_def and current_phase_def.get("instructions"):
-                    phase_instructions = current_phase_def["instructions"].format(
-                        session_id=session_id,
-                        round_id=round_id or "",
-                        agent_name=agent_name,
-                        feedback_item_ids=", ".join(feedback_item_ids),
-                    )
-                else:
-                    phase_instructions = (
-                        "YOU ARE IN PHASE 2: DELIBERATION. "
-                        "You must review and vote on feedback items — do NOT do general analysis. "
-                        "Follow these steps EXACTLY:\n"
-                        f"1. Call bs_list_feedback(session_id='{session_id}') to see all items\n"
-                        "2. For EACH item, call bs_get_feedback(item_id=<id>) to read the full "
-                        "content and all agents' prior verdicts\n"
-                        "3. For EACH item, call bs_respond_to_feedback("
-                        f"item_id=<id>{round_ref}, agent_name='{agent_name}', "
-                        "verdict='accept' or 'reject' or 'modify', reasoning='your reasoning')\n"
-                        f"4. Call bs_save_response({round_ref}, "
-                        f"agent_name='{agent_name}', content='summary of your verdicts')\n"
-                        f"\nFeedback item IDs: {', '.join(feedback_item_ids)}"
-                    )
-            else:
-                current_phase = "analysis"
-
-        # Task from round (question + objective)
-        task = None
-        if round_id:
-            rnd = self.get_round(round_id)
-            if rnd:
-                task = {}
-                if rnd.get("objective"):
-                    task["objective"] = rnd["objective"]
-                if rnd.get("question"):
-                    task["question"] = rnd["question"]
-
-        return {
-            "your_identity": identity,
-            "workflow": workflow,
-            "tools": tool_list,
-            "task": task,
-            "session_role": session_role,
-            "session_role_detail": session_role_detail,
-            "session_context": session_context,
-            "guidelines": guidelines_list,
-            "current_phase": current_phase,
-            "phase_instructions": phase_instructions,
-            "feedback_item_ids": feedback_item_ids,
-        }
-
-    # -- Session briefing (context + role + guidelines) --
-
-    def get_agent_briefing(self, session_id: str, agent_name: str) -> dict:
-        """Get everything an agent needs before starting work."""
-        context = self.get_context(session_id)
-        role = self.get_role(session_id, agent_name)
-        if not role:
-            defn = self.get_agent_definition(agent_name)
-            role_text = defn["default_role"] if defn else None
-        else:
-            role_text = role["role"]
-        guidelines = self.list_guidelines(session_id)
-        return {
-            "session_context": context,
-            "your_role": role_text,
-            "guidelines": [g["content"] for g in guidelines],
-        }
+    # -- Onboarding & briefing: Moved to brainstorm_service.BrainstormService --
 
     # -- Full session dump --
 
@@ -1119,6 +1097,140 @@ class BrainstormDB:
             "roles": roles,
             "consensus": consensus,
         }
+
+    # -- Round Participants (sync barrier) --
+
+    def register_participants(
+        self, round_id: str, agent_names: list[str], phase: str = "analysis",
+    ) -> list[dict]:
+        """Register expected agents for a round. Call before dispatch."""
+        now = _now()
+        results = []
+        for name in agent_names:
+            pid = f"rp_{_uid()}"
+            self._conn.execute(
+                "INSERT INTO round_participants"
+                " (id, round_id, agent_name, phase, status, created_at)"
+                " VALUES (?, ?, ?, ?, 'pending', ?)"
+                " ON CONFLICT(round_id, agent_name) DO UPDATE SET"
+                " phase=excluded.phase, status='pending', created_at=excluded.created_at",
+                (pid, round_id, name, phase, now),
+            )
+            results.append({"id": pid, "round_id": round_id, "agent_name": name})
+        self._conn.commit()
+        return results
+
+    def update_participant_status(
+        self, round_id: str, agent_name: str, status: str, *,
+        quality: str | None = None, error_detail: str | None = None,
+    ) -> dict | None:
+        """Update a participant's status."""
+        now = _now()
+        time_col = "dispatched_at" if status == "dispatched" else "responded_at"
+        self._conn.execute(
+            f"UPDATE round_participants SET status=?, response_quality=?,"
+            f" error_detail=?, {time_col}=? WHERE round_id=? AND agent_name=?",
+            (status, quality, error_detail, now, round_id, agent_name),
+        )
+        self._conn.commit()
+        return self.get_participant(round_id, agent_name)
+
+    def get_participant(self, round_id: str, agent_name: str) -> dict | None:
+        row = self._conn.execute(
+            "SELECT * FROM round_participants WHERE round_id=? AND agent_name=?",
+            (round_id, agent_name),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def list_participants(self, round_id: str, status: str | None = None) -> list[dict]:
+        if status:
+            rows = self._conn.execute(
+                "SELECT * FROM round_participants WHERE round_id=? AND status=? ORDER BY agent_name",
+                (round_id, status),
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT * FROM round_participants WHERE round_id=? ORDER BY agent_name",
+                (round_id,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def set_participant_feedback_expected(self, round_id: str, agent_name: str, count: int) -> None:
+        """Set the expected feedback item count for a participant."""
+        self._conn.execute(
+            "UPDATE round_participants SET feedback_items_expected=? WHERE round_id=? AND agent_name=?",
+            (count, round_id, agent_name),
+        )
+        self._conn.commit()
+
+    def mark_response_quality_and_source(self, round_id: str, agent_name: str, quality: str, source: str) -> None:
+        """Set the quality and source fields on a response."""
+        self._conn.execute(
+            "UPDATE responses SET quality=?, source=? WHERE round_id=? AND agent_name=?",
+            (quality, source, round_id, agent_name),
+        )
+        self._conn.commit()
+
+    def count_agent_feedback_votes(self, round_id: str, agent_name: str, item_ids: list[str]) -> int:
+        """Count distinct feedback items this agent has voted on in a round."""
+        if not item_ids:
+            return 0
+        placeholders = ",".join("?" * len(item_ids))
+        row = self._conn.execute(
+            f"SELECT COUNT(DISTINCT item_id) FROM feedback_responses"
+            f" WHERE round_id=? AND agent_name=? AND item_id IN ({placeholders})",
+            (round_id, agent_name, *item_ids),
+        ).fetchone()
+        return row[0]
+
+    def count_item_votes(self, round_id: str, item_id: str) -> int:
+        """Count distinct agents that voted on a feedback item in a round."""
+        row = self._conn.execute(
+            "SELECT COUNT(DISTINCT agent_name) FROM feedback_responses"
+            " WHERE round_id=? AND item_id=?",
+            (round_id, item_id),
+        ).fetchone()
+        return row[0]
+
+    # -- Completion Gates, phase readiness, quality classification:
+    #    Moved to brainstorm_service.BrainstormService
+    #    (check_round_complete, check_feedback_votes_complete,
+    #     check_phase_ready, classify_response_quality)
+
+    # -- Retry support --
+
+    def get_retryable_participants(self, round_id: str) -> list[dict]:
+        """Get participants that failed but can still be retried."""
+        rows = self._conn.execute(
+            "SELECT * FROM round_participants"
+            " WHERE round_id=? AND status IN ('failed','timed_out') AND retry_count < max_retries"
+            " ORDER BY agent_name",
+            (round_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def increment_retry(self, round_id: str, agent_name: str) -> dict | None:
+        """Increment retry_count and reset status to pending."""
+        self._conn.execute(
+            "UPDATE round_participants SET retry_count = retry_count + 1, status = 'pending'"
+            " WHERE round_id=? AND agent_name=?",
+            (round_id, agent_name),
+        )
+        self._conn.commit()
+        return self.get_participant(round_id, agent_name)
+
+    # -- Round phase management --
+
+    def set_round_phase(self, round_id: str, phase: str) -> None:
+        self._conn.execute("UPDATE rounds SET phase=? WHERE id=?", (phase, round_id))
+        self._conn.commit()
+
+    def complete_round(self, round_id: str) -> None:
+        now = _now()
+        self._conn.execute(
+            "UPDATE rounds SET completed_at=? WHERE id=?", (now, round_id)
+        )
+        self._conn.commit()
 
     def close(self):
         self._conn.close()

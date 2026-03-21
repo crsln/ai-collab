@@ -21,6 +21,39 @@ from pathlib import Path
 from mcp.server.fastmcp import Context, FastMCP
 
 from brainstorm_db import BrainstormDB
+from brainstorm_service import BrainstormService, classify_response_quality
+from brainstorm_tools import (
+    handle_add_guideline,
+    handle_batch_respond,
+    handle_complete_session,
+    handle_create_feedback,
+    handle_get_briefing,
+    handle_get_consensus,
+    handle_get_feedback,
+    handle_get_onboarding,
+    handle_get_response,
+    handle_get_role,
+    handle_get_role_template,
+    handle_get_round_responses,
+    handle_get_tool_guide,
+    handle_get_workflow,
+    handle_list_feedback,
+    handle_list_guidelines,
+    handle_list_roles,
+    handle_list_rounds,
+    handle_list_sessions,
+    handle_list_tool_guides,
+    handle_new_round,
+    handle_new_session,
+    handle_respond_to_feedback,
+    handle_save_consensus,
+    handle_save_response,
+    handle_session_history,
+    handle_set_context,
+    handle_set_role,
+    handle_suggest_roles,
+    handle_update_feedback_status,
+)
 from config import get_config, get_enabled_agents, AgentConfig
 from providers import get_provider
 from providers.errors import (
@@ -38,6 +71,7 @@ _DB_PATH = Path(os.environ.get(
     str(_cfg.db_path),
 ))
 _db = BrainstormDB(_DB_PATH)
+_svc = BrainstormService(_db)
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]|\x1b\].*?\x07|\x1b[()][A-Z0-9]")
 _SAVE_RESPONSES = os.environ.get("AI_COLLAB_SAVE_RESPONSES", "").lower() in ("1", "true", "yes")
@@ -45,6 +79,13 @@ _RESPONSES_DIR = Path(os.environ.get(
     "AI_COLLAB_RESPONSES_DIR",
     str(Path(__file__).parent / ".brainstorm"),
 ))
+
+
+def _json(obj) -> str:
+    """Serialize handler result to JSON string (pass-through if already a string)."""
+    if isinstance(obj, str):
+        return obj
+    return json.dumps(obj, indent=2)
 
 
 def _save_response(agent: str, question: str, response: str) -> Path:
@@ -211,7 +252,7 @@ def bs_new_session(topic: str, project: str | None = None) -> str:
     Returns:
         Session info with ID to use in subsequent calls.
     """
-    return json.dumps(_db.create_session(topic, project), indent=2)
+    return _json(handle_new_session(_db, topic, project))
 
 
 @mcp.tool()
@@ -222,7 +263,7 @@ def bs_list_sessions(status: str | None = None, limit: int = 10) -> str:
         status: Filter by status ('active', 'completed'). None for all.
         limit: Max sessions to return.
     """
-    return json.dumps(_db.list_sessions(status, limit), indent=2)
+    return _json(handle_list_sessions(_db, status, limit))
 
 
 @mcp.tool()
@@ -237,8 +278,7 @@ def bs_set_context(session_id: str, context: str) -> str:
         session_id: The session to attach context to.
         context: Codebase summary, relevant file contents, architecture notes, etc.
     """
-    _db.set_context(session_id, context)
-    return f"Context attached to session {session_id} ({len(context)} chars)."
+    return handle_set_context(_db, session_id, context)
 
 
 @mcp.tool()
@@ -248,8 +288,7 @@ def bs_complete_session(session_id: str) -> str:
     Args:
         session_id: The session to complete.
     """
-    _db.complete_session(session_id)
-    return f"Session {session_id} marked as completed."
+    return handle_complete_session(_db, session_id)
 
 
 @mcp.tool()
@@ -262,7 +301,7 @@ def bs_new_round(session_id: str, objective: str | None = None, question: str | 
         question: The question/task for agents this round. Stored in DB and
                   delivered to agents via bs_get_onboarding (pull model).
     """
-    return json.dumps(_db.create_round(session_id, objective, question=question), indent=2)
+    return _json(handle_new_round(_db, session_id, objective, question))
 
 
 @mcp.tool()
@@ -272,7 +311,7 @@ def bs_list_rounds(session_id: str) -> str:
     Args:
         session_id: The session to list rounds for.
     """
-    return json.dumps(_db.list_rounds(session_id), indent=2)
+    return _json(handle_list_rounds(_db, session_id))
 
 
 @mcp.tool()
@@ -284,7 +323,8 @@ def bs_save_response(round_id: str, agent_name: str, content: str) -> str:
         agent_name: Which agent is responding.
         content: The full response text.
     """
-    return json.dumps(_db.save_response(round_id, agent_name, content), indent=2)
+    # Orchestrator server — no MCP source marking (stdout responses are classified separately)
+    return _json(handle_save_response(_db, round_id, agent_name, content))
 
 
 @mcp.tool()
@@ -295,10 +335,7 @@ def bs_get_response(round_id: str, agent_name: str) -> str:
         round_id: The round to look in.
         agent_name: Which agent's response to get.
     """
-    result = _db.get_response(round_id, agent_name)
-    if not result:
-        return f"No response from {agent_name} in round {round_id}"
-    return json.dumps(result, indent=2)
+    return _json(handle_get_response(_db, round_id, agent_name))
 
 
 @mcp.tool()
@@ -308,7 +345,7 @@ def bs_get_round_responses(round_id: str) -> str:
     Args:
         round_id: The round to get responses for.
     """
-    return json.dumps(_db.get_round_responses(round_id), indent=2)
+    return _json(handle_get_round_responses(_db, round_id))
 
 
 @mcp.tool()
@@ -320,7 +357,7 @@ def bs_save_consensus(session_id: str, content: str, round_id: str | None = None
         content: The full consensus text.
         round_id: Optional specific round this consensus covers.
     """
-    return json.dumps(_db.save_consensus(session_id, content, round_id), indent=2)
+    return _json(handle_save_consensus(_db, session_id, content, round_id))
 
 
 @mcp.tool()
@@ -330,10 +367,7 @@ def bs_get_consensus(session_id: str) -> str:
     Args:
         session_id: The session to get consensus for.
     """
-    result = _db.get_latest_consensus(session_id)
-    if not result:
-        return f"No consensus yet for session {session_id}"
-    return json.dumps(result, indent=2)
+    return _json(handle_get_consensus(_db, session_id))
 
 
 @mcp.tool()
@@ -343,7 +377,7 @@ def bs_session_history(session_id: str) -> str:
     Args:
         session_id: The session to dump.
     """
-    return json.dumps(_db.get_session_history(session_id), indent=2)
+    return _json(handle_session_history(_db, session_id))
 
 
 @mcp.tool()
@@ -356,7 +390,7 @@ def bs_get_briefing(session_id: str, agent_name: str) -> str:
         session_id: The session.
         agent_name: Your agent name (copilot, gemini, claude).
     """
-    return json.dumps(_db.get_agent_briefing(session_id, agent_name), indent=2)
+    return _json(handle_get_briefing(_svc, session_id, agent_name))
 
 
 @mcp.tool()
@@ -374,7 +408,7 @@ def bs_get_onboarding(
         session_id: Optional — for session-specific context, role, and guidelines.
         round_id: Optional — for phase-specific instructions.
     """
-    return json.dumps(_db.get_onboarding_briefing(agent_name, session_id, round_id), indent=2)
+    return _json(handle_get_onboarding(_db, _svc, agent_name, session_id, round_id))
 
 
 @mcp.tool()
@@ -384,11 +418,7 @@ def bs_get_workflow(name: str = "brainstorm_3phase") -> str:
     Args:
         name: Workflow name (default: brainstorm_3phase).
     """
-    wf = _db.get_workflow_template(name)
-    if not wf:
-        return f"Workflow '{name}' not found. Run 'seed-defaults' to populate."
-    wf["phases"] = json.loads(wf["phases"])
-    return json.dumps(wf, indent=2)
+    return _json(handle_get_workflow(_db, name))
 
 
 @mcp.tool()
@@ -398,10 +428,7 @@ def bs_get_tool_guide(tool_name: str) -> str:
     Args:
         tool_name: The tool name (e.g. 'bs_list_feedback').
     """
-    guide = _db.get_tool_guide(tool_name)
-    if not guide:
-        return f"No guide found for tool '{tool_name}'."
-    return json.dumps(guide, indent=2)
+    return _json(handle_get_tool_guide(_db, tool_name))
 
 
 @mcp.tool()
@@ -411,19 +438,19 @@ def bs_list_tool_guides(phase: str | None = None) -> str:
     Args:
         phase: Filter by phase (setup, phase1, phase2, phase3, any). None for all.
     """
-    return json.dumps(_db.list_tool_guides(phase), indent=2)
+    return _json(handle_list_tool_guides(_db, phase))
 
 
 @mcp.tool()
-def bs_add_guideline(session_id: str, guideline: str) -> str:
+def bs_add_guideline(session_id: str, content: str) -> str:
     """Add a must-do guideline to a session (e.g. 'Always cite file:line for claims').
 
     Args:
         session_id: The session.
-        guideline: The guideline text.
+        content: The guideline text.
     """
-    _db.add_guideline(session_id, guideline)
-    return "Guideline added."
+    # Canonical param name: content (was 'guideline' — standardized across servers)
+    return _json(handle_add_guideline(_db, session_id, content))
 
 
 @mcp.tool()
@@ -433,7 +460,7 @@ def bs_list_guidelines(session_id: str) -> str:
     Args:
         session_id: The session.
     """
-    return json.dumps(_db.list_guidelines(session_id), indent=2)
+    return _json(handle_list_guidelines(_db, session_id))
 
 
 def _build_round_prompt(
@@ -447,8 +474,9 @@ def _build_round_prompt(
     retrieves everything (task, role, workflow, context) from the DB
     via bs_get_onboarding().
     """
+    # Use space instead of \n — newlines in subprocess args break Windows .cmd parsing
     return (
-        f"You are '{agent_name}'. Session: {session_id}, Round: {round_id}.\n"
+        f"You are '{agent_name}'. Session: {session_id}, Round: {round_id}. "
         f"Call bs_get_onboarding(agent_name='{agent_name}', session_id='{session_id}', "
         f"round_id='{round_id}') to get your task, role, and instructions."
     )
@@ -491,7 +519,21 @@ async def bs_run_round(
         await ctx.report_progress(1, total_steps)
         await ctx.info(f"Round {round_num} created. Dispatching to {len(agent_list)} agents...")
 
+    # Detect phase and register participants
+    feedback_items = _db.list_feedback_items(session_id)
+    phase = "deliberation" if feedback_items else "analysis"
+    _db.set_round_phase(round_id, phase)
+    _db.register_participants(round_id, agent_list, phase=phase)
+    # Set feedback expectations for deliberation
+    if phase == "deliberation":
+        pending_count = len([f for f in feedback_items if f.get("status") == "pending"])
+        for an in agent_list:
+            _db.set_participant_feedback_expected(round_id, an, pending_count)
+
     # 2. Build per-agent prompts (pure IDs) and dispatch in parallel
+    for agent_name in agent_list:
+        _db.update_participant_status(round_id, agent_name, "dispatched")
+
     tasks = {}
     for agent_name in agent_list:
         prompt = _build_round_prompt(session_id, round_id, agent_name)
@@ -517,24 +559,137 @@ async def bs_run_round(
                 await ctx.report_progress(1 + completed, total_steps)
                 await ctx.info(f"{agent_name} finished ({completed}/{len(agent_list)})")
 
-    # 3. Save responses — skip if agent already self-saved to DB
+    # 3. Save responses with quality classification
     output_parts = [f"# Round {round_num}: {objective}\n"]
     for agent_name in agent_list:
         result = results[agent_name]
-        if isinstance(result, Exception):
-            content = _format_error(agent_name, "exception", str(result))
-        else:
-            content = result
-
         existing = _db.get_response(round_id, agent_name)
-        if existing:
-            output_parts.append(f"## {agent_name} (self-saved)\n\n{existing['content']}")
-        else:
-            _db.save_response(round_id, agent_name, content)
-            output_parts.append(f"## {agent_name}\n\n{content}")
 
-    output_parts.append(f"\n---\n*Round ID: {round_id} | Responses saved to DB.*")
+        if existing and existing.get("source") == "mcp":
+            # Agent self-saved via MCP — trusted
+            _db.update_participant_status(round_id, agent_name, "validated", quality="self_saved")
+            output_parts.append(f"## {agent_name} (self-saved)\n\n{existing['content']}")
+        elif isinstance(result, Exception):
+            content = _format_error(agent_name, "exception", str(result))
+            _db.save_response(round_id, agent_name, content)
+            _db.mark_response_quality_and_source(round_id, agent_name, "error", "stdout")
+            _db.update_participant_status(round_id, agent_name, "failed", quality="error", error_detail=str(result))
+            output_parts.append(f"## {agent_name} [FAILED]\n\n{content}")
+        else:
+            quality = classify_response_quality(result)
+            if not existing:
+                _db.save_response(round_id, agent_name, result)
+            _db.mark_response_quality_and_source(round_id, agent_name, quality, "stdout")
+            status = "responded" if quality == "valid" else "failed"
+            _db.update_participant_status(round_id, agent_name, status, quality=quality)
+            output_parts.append(f"## {agent_name}\n\n{result}")
+
+    # 4. FAIL-FAST gate check
+    gate = _svc.check_round_complete(round_id)
+    if gate["complete"]:
+        _db.complete_round(round_id)
+        output_parts.append(f"\n---\n*Round gate: {gate['responded']}/{gate['total']} valid. Round ID: {round_id}*")
+    else:
+        failed_agents = [a for a, s in gate["agents"].items() if s["status"] in ("failed", "timed_out")]
+        error_details = []
+        for a in failed_agents:
+            err = gate["agents"][a].get("error") or gate["agents"][a].get("quality", "unknown")
+            error_details.append(f"{a} ({err})")
+        output_parts.append(
+            f"\n---\n**[ROUND FAILED]** {gate['responded']}/{gate['total']} valid responses. "
+            f"Failed: {', '.join(error_details)}.\n"
+            f"Round cannot proceed. Fix the issue and retry with `bs_retry_agent(round_id='{round_id}', agent_name='...', cwd='...')`.\n"
+            f"*Round ID: {round_id}*"
+        )
+
     return "\n\n".join(output_parts)
+
+
+@mcp.tool()
+def bs_check_round_status(round_id: str) -> str:
+    """Check completion status of a round — which agents responded, quality, and gate status.
+
+    Args:
+        round_id: The round to check.
+
+    Returns:
+        Completion gate status with per-agent details.
+    """
+    return json.dumps(_svc.check_round_complete(round_id), indent=2)
+
+
+@mcp.tool()
+def bs_check_feedback_status(round_id: str, session_id: str) -> str:
+    """Check if all agents voted on all feedback items for a deliberation round.
+
+    Args:
+        round_id: The deliberation round.
+        session_id: The session (to find feedback items).
+
+    Returns:
+        Vote completeness matrix with per-agent and per-item details.
+    """
+    return json.dumps(_svc.check_feedback_votes_complete(round_id, session_id), indent=2)
+
+
+@mcp.tool()
+async def bs_retry_agent(
+    round_id: str, agent_name: str, cwd: str | None = None,
+) -> str:
+    """Retry a failed/timed-out agent in an existing round.
+
+    Args:
+        round_id: The round to retry in.
+        agent_name: The agent to retry.
+        cwd: Working directory for agent CLI.
+
+    Returns:
+        The retry result or error message.
+    """
+    participant = _db.get_participant(round_id, agent_name)
+    if not participant:
+        return f"Agent '{agent_name}' is not a participant in round {round_id}"
+    if participant["status"] not in ("failed", "timed_out"):
+        return f"Agent '{agent_name}' status is '{participant['status']}', not failed/timed_out"
+    if participant["retry_count"] >= participant["max_retries"]:
+        return f"Agent '{agent_name}' has exhausted retries ({participant['retry_count']}/{participant['max_retries']})"
+
+    _db.increment_retry(round_id, agent_name)
+    round_info = _db.get_round(round_id)
+    if not round_info:
+        return f"Round {round_id} not found"
+
+    session_id = round_info["session_id"]
+    prompt = _build_round_prompt(session_id, round_id, agent_name)
+    _db.update_participant_status(round_id, agent_name, "dispatched")
+
+    try:
+        result = await _run_agent(agent_name, prompt, cwd=cwd)
+    except Exception as e:
+        _db.update_participant_status(round_id, agent_name, "failed", quality="error", error_detail=str(e))
+        return f"[RETRY FAILED] {agent_name}: {e}"
+
+    # Check if agent self-saved
+    existing = _db.get_response(round_id, agent_name)
+    if existing and existing.get("source") == "mcp":
+        _db.update_participant_status(round_id, agent_name, "validated", quality="self_saved")
+        return f"[RETRY OK] {agent_name} self-saved via MCP.\n\n{existing['content']}"
+
+    quality = classify_response_quality(result)
+    _db.save_response(round_id, agent_name, result)
+    _db.mark_response_quality_and_source(round_id, agent_name, quality, "stdout")
+    status = "responded" if quality == "valid" else "failed"
+    _db.update_participant_status(round_id, agent_name, status, quality=quality)
+
+    if quality == "valid":
+        gate = _svc.check_round_complete(round_id)
+        gate_msg = f"Round gate: {gate['responded']}/{gate['total']} valid."
+        if gate["complete"]:
+            _db.complete_round(round_id)
+            gate_msg += " Round COMPLETE."
+        return f"[RETRY OK] {agent_name} responded ({quality}).\n{gate_msg}\n\n{result}"
+    else:
+        return f"[RETRY FAILED] {agent_name} response quality: {quality}.\n\n{result}"
 
 
 # ── Feedback tools ────────────────────────────────────────────────────
@@ -542,22 +697,40 @@ async def bs_run_round(
 
 @mcp.tool()
 def bs_create_feedback(
-    session_id: str, round_id: str, source_agent: str,
+    session_id: str, source_round_id: str, source_agent: str,
     title: str, content: str,
 ) -> str:
     """Create a feedback item from a round's findings. Claude creates these after Phase 1.
 
     Args:
         session_id: The brainstorm session.
-        round_id: The round this finding came from.
+        source_round_id: The round this finding came from.
         source_agent: Which agent produced this finding.
         title: Short title for the finding.
         content: Full description of the finding.
     """
-    return json.dumps(
-        _db.create_feedback_item(session_id, round_id, source_agent, title, content),
-        indent=2,
-    )
+    # Canonical param name: source_round_id (was 'round_id' — standardized across servers)
+    return _json(handle_create_feedback(_db, session_id, source_round_id, source_agent, title, content))
+
+
+@mcp.tool()
+def bs_batch_create_feedback(session_id: str, items: str) -> str:
+    """Create multiple feedback items in a single call.
+
+    Args:
+        session_id: The brainstorm session.
+        items: JSON array of objects, each with: source_round_id, source_agent, title, content.
+            Example: [{"source_round_id":"r_xxx","source_agent":"copilot","title":"...","content":"..."},...]
+    """
+    try:
+        parsed = json.loads(items)
+    except (ValueError, TypeError):
+        return "Invalid JSON in items parameter."
+    for item in parsed:
+        if not all(k in item for k in ("source_round_id", "source_agent", "title", "content")):
+            return f"Each item must have source_round_id, source_agent, title, content. Got: {list(item.keys())}"
+    results = _db.batch_create_feedback_items(session_id, parsed)
+    return json.dumps({"created": len(results), "items": results}, indent=2)
 
 
 @mcp.tool()
@@ -568,7 +741,8 @@ def bs_list_feedback(session_id: str, status: str | None = None) -> str:
         session_id: The session to list feedback for.
         status: Filter by status (pending, accepted, rejected, modified, consolidated).
     """
-    return json.dumps(_db.list_feedback_items(session_id, status), indent=2)
+    # Canonical form: raw list (no {"feedback_items": ...} wrapper)
+    return _json(handle_list_feedback(_db, session_id, status))
 
 
 @mcp.tool()
@@ -578,10 +752,7 @@ def bs_get_feedback(item_id: str) -> str:
     Args:
         item_id: The feedback item ID.
     """
-    result = _db.get_feedback_item(item_id)
-    if not result:
-        return f"Feedback item {item_id} not found"
-    return json.dumps(result, indent=2)
+    return _json(handle_get_feedback(_db, item_id))
 
 
 @mcp.tool()
@@ -598,12 +769,22 @@ def bs_respond_to_feedback(
         verdict: One of: accept, reject, modify.
         reasoning: Why the agent chose this verdict.
     """
-    if verdict not in ("accept", "reject", "modify"):
-        return f"Invalid verdict '{verdict}'. Must be: accept, reject, modify"
-    return json.dumps(
-        _db.save_feedback_response(item_id, round_id, agent_name, verdict, reasoning),
-        indent=2,
-    )
+    return _json(handle_respond_to_feedback(_db, item_id, round_id, agent_name, verdict, reasoning))
+
+
+@mcp.tool()
+def bs_batch_respond(
+    round_id: str, agent_name: str, verdicts: str,
+) -> str:
+    """Submit verdicts on multiple feedback items in a single call.
+
+    Args:
+        round_id: The current deliberation round.
+        agent_name: Which agent is responding.
+        verdicts: JSON array of objects, each with: item_id, verdict (accept/reject/modify), reasoning.
+            Example: [{"item_id":"fb_xxx","verdict":"accept","reasoning":"..."},...]
+    """
+    return _json(handle_batch_respond(_db, round_id, agent_name, verdicts))
 
 
 @mcp.tool()
@@ -614,8 +795,7 @@ def bs_update_feedback_status(item_id: str, status: str) -> str:
         item_id: The feedback item.
         status: New status (pending, accepted, rejected, modified, consolidated).
     """
-    _db.update_feedback_status(item_id, status)
-    return f"Feedback {item_id} status updated to '{status}'."
+    return handle_update_feedback_status(_db, item_id, status)
 
 
 # ── Agent role tools ──────────────────────────────────────────────────
@@ -630,7 +810,7 @@ def bs_set_role(session_id: str, agent_name: str, role: str) -> str:
         agent_name: The agent name.
         role: The role description / instructions for this agent.
     """
-    return json.dumps(_db.set_role(session_id, agent_name, role), indent=2)
+    return _json(handle_set_role(_db, session_id, agent_name, role))
 
 
 @mcp.tool()
@@ -641,10 +821,7 @@ def bs_get_role(session_id: str, agent_name: str) -> str:
         session_id: The brainstorm session.
         agent_name: The agent to get the role for.
     """
-    result = _db.get_role(session_id, agent_name)
-    if not result:
-        return f"No role set for {agent_name} in session {session_id}"
-    return json.dumps(result, indent=2)
+    return _json(handle_get_role(_db, session_id, agent_name))
 
 
 # ── Role Library tools ─────────────────────────────────────────────────
@@ -701,20 +878,7 @@ def bs_list_roles(agent_name: str | None = None, tag: str | None = None) -> str:
         agent_name: Filter to roles for this agent (also includes agent-agnostic roles).
         tag: Filter by tag (e.g. 'security', 'architecture').
     """
-    roles = _db.list_role_templates(agent_name, tag)
-    summary = [
-        {
-            "slug": r["slug"],
-            "display_name": r["display_name"],
-            "agent_name": r["agent_name"],
-            "description": r["description"],
-            "tags": r["tags"],
-            "usage_count": r["usage_count"],
-            "has_behavior_definition": bool(r.get("vision") or r.get("behavior")),
-        }
-        for r in roles
-    ]
-    return json.dumps(summary, indent=2)
+    return _json(handle_list_roles(_db, agent_name, tag))
 
 
 @mcp.tool()
@@ -722,20 +886,26 @@ def bs_suggest_roles(
     topic: str,
     agents: str | None = None,
     top_n: int = 6,
+    diversify: bool = False,
 ) -> str:
     """Suggest role templates appropriate for a brainstorm topic.
+
+    Roles are NOT fixed to models. The recommended pattern is role rotation:
+    each round, ALL agents get the SAME role. Rotate the role each round so
+    every model covers every perspective. Use top_roles ranking to pick which
+    roles to rotate through.
 
     Args:
         topic: The brainstorm topic/question (same string passed to bs_new_session).
         agents: Comma-separated agent names for per-agent suggestions (e.g. "copilot,gemini").
         top_n: Number of top roles to return (default: 6).
+        diversify: If True, assigns unique roles per agent (each slug used once).
+            Default False — all agents get the same top-matched role per round.
 
     Returns JSON with top_roles (ranked by topic match) and assignments (per-agent suggestions).
-    Apply suggestions with bs_apply_role(session_id, agent_name, slug).
+    Apply with bs_apply_role(session_id, agent_name, slug).
     """
-    agent_list = [a.strip() for a in agents.split(",") if a.strip()] if agents else []
-    result = _db.suggest_roles(topic, agent_list, top_n=top_n)
-    return json.dumps(result, indent=2)
+    return _json(handle_suggest_roles(_db, topic, agents, top_n, diversify))
 
 
 @mcp.tool()
@@ -745,10 +915,7 @@ def bs_get_role_template(slug: str) -> str:
     Args:
         slug: The role template slug or ID.
     """
-    result = _db.get_role_template(slug)
-    if not result:
-        return f"Role template '{slug}' not found."
-    return json.dumps(result, indent=2)
+    return _json(handle_get_role_template(_db, slug))
 
 
 @mcp.tool()
@@ -817,6 +984,30 @@ def bs_apply_role(session_id: str, agent_name: str, slug: str) -> str:
     if not result:
         return f"Role template '{slug}' not found."
     return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+def bs_batch_apply_roles(session_id: str, assignments: str) -> str:
+    """Apply role templates to multiple agents in a single call.
+
+    Args:
+        session_id: The brainstorm session.
+        assignments: JSON array of objects, each with: agent_name, slug.
+            Example: [{"agent_name":"copilot","slug":"code-reviewer"},{"agent_name":"gemini","slug":"code-reviewer"}]
+    """
+    try:
+        parsed = json.loads(assignments)
+    except (ValueError, TypeError):
+        return "Invalid JSON in assignments parameter."
+    for a in parsed:
+        if not all(k in a for k in ("agent_name", "slug")):
+            return f"Each assignment must have agent_name, slug. Got: {list(a.keys())}"
+    results = _db.batch_apply_role_templates(session_id, parsed)
+    not_found = [a["slug"] for a in parsed if not any(r.get("template_slug") == a["slug"] for r in results)]
+    resp = {"applied": len(results), "roles": results}
+    if not_found:
+        resp["not_found"] = not_found
+    return json.dumps(resp, indent=2)
 
 
 if __name__ == "__main__":

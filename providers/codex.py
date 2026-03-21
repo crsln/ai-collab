@@ -13,7 +13,7 @@ class CodexProvider(GenericCLIProvider):
         if agent_config is None:
             agent_config = AgentConfig(
                 name="codex", command="codex",
-                args=["-p", "{prompt}", "--full-auto"],
+                args=["exec", "-p", "{prompt}", "--full-auto"],
                 display_name="OpenAI Codex",
                 description="Code generation, file editing, spec implementation",
             )

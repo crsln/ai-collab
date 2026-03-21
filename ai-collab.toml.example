@@ -13,7 +13,7 @@ default_timeout = 900  # 15 minutes
 [agents.copilot]
 enabled = true
 command = "copilot"
-args = ["-p", "{prompt}", "--allow-all"]
+args = ["-p", "{prompt}", "--allow-all", "--allow-tool", "brainstorm", "atlas"]
 # model = ""  # uses CLI default
 # timeout = 900
 display_name = "GitHub Copilot"
@@ -33,7 +33,7 @@ description = "Architecture analysis, research, alternative approaches, document
 [agents.codex]
 enabled = false
 command = "codex"
-args = ["-p", "{prompt}", "--full-auto"]
+args = ["exec", "-p", "{prompt}", "--full-auto"]
 display_name = "OpenAI Codex"
 description = "Code generation, file editing, implementing specs from plans"
 

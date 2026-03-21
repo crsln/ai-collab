@@ -5,7 +5,7 @@ Usage:
     ai-collab init              Interactive first-time setup wizard
     ai-collab seed              Seed database with default agent/workflow/tool data
     ai-collab agents            List configured agents and their status
-    ai-collab tui "question"    Launch real-time TUI with streaming agent panels
+    ai-collab dashboard         Launch the web dashboard in your browser
 
 Options:
     --non-interactive           Skip prompts, use all detected agents with defaults
@@ -35,32 +35,7 @@ _DB_PATH = _PROJECT_DIR / ".data" / "brainstorm.db"
 # Known agent definitions (CLI detection + config defaults)
 # ---------------------------------------------------------------------------
 
-KNOWN_AGENTS = {
-    "copilot": {
-        "command": "copilot",
-        "args": ["-p", "{prompt}", "--allow-all"],
-        "display_name": "GitHub Copilot",
-        "description": "Code analysis, shell commands, git operations, GitHub CLI",
-    },
-    "gemini": {
-        "command": "gemini",
-        "args": ["-p", "{prompt}", "--yolo"],
-        "display_name": "Google Gemini",
-        "description": "Architecture analysis, research, alternative approaches, documentation",
-    },
-    "codex": {
-        "command": "codex",
-        "args": ["-p", "{prompt}", "--full-auto"],
-        "display_name": "OpenAI Codex",
-        "description": "Code generation and autonomous execution",
-    },
-    "aider": {
-        "command": "aider",
-        "args": ["--message", "{prompt}"],
-        "display_name": "Aider",
-        "description": "AI pair programming with git integration",
-    },
-}
+from config import BUILTIN_AGENTS as KNOWN_AGENTS
 
 # Claude is always listed but noted as the orchestrator, not a delegate agent.
 ORCHESTRATOR = {
@@ -629,26 +604,24 @@ def _cmd_agents(args: argparse.Namespace) -> None:
 
 
 # ---------------------------------------------------------------------------
-# tui command
+# dashboard command
 # ---------------------------------------------------------------------------
 
-def _cmd_tui(args: argparse.Namespace) -> None:
-    try:
-        from ai_collab_tui import run_tui
-    except ImportError:
-        print("Error: TUI requires the 'textual' package.")
-        print("Install it with: pip install ai-collab[tui]")
-        sys.exit(1)
+def _cmd_dashboard(args: argparse.Namespace) -> None:
+    import threading
+    import time
+    import webbrowser
 
-    run_tui(hours=getattr(args, "hours", 24), limit=getattr(args, "limit", 6))
+    from dashboard import main as dashboard_main
 
+    port = args.port
 
-def _cmd_dispatch(args: argparse.Namespace) -> None:
-    """Send a question to the TUI queue (for testing or scripting)."""
-    from ai_collab_tui import dispatch_to_tui
-    req_id = dispatch_to_tui(args.question, cwd=args.cwd)
-    print(f"Dispatched to TUI: {req_id}")
-    print(f"  Question: {args.question[:80]}")
+    def open_browser():
+        time.sleep(0.5)
+        webbrowser.open(f"http://localhost:{port}")
+
+    threading.Thread(target=open_browser, daemon=True).start()
+    dashboard_main(port=port, db_path=args.db)
 
 
 # ---------------------------------------------------------------------------
@@ -666,6 +639,8 @@ def main() -> None:
             "  ai-collab init --non-interactive Auto-configure with defaults\n"
             "  ai-collab seed                  Seed database with defaults\n"
             "  ai-collab agents                List configured agents\n"
+            "  ai-collab dashboard             Launch web dashboard\n"
+            "  ai-collab dashboard --port 9000 Launch on custom port\n"
         ),
     )
 
@@ -695,47 +670,21 @@ def main() -> None:
         help="List configured agents and their status",
     )
 
-    # tui
-    p_tui = sub.add_parser(
-        "tui",
-        help="Launch live feed monitor (stays open, watches for brainstorm rounds)",
+    # dashboard
+    p_dashboard = sub.add_parser(
+        "dashboard",
+        help="Launch the web dashboard in your browser",
     )
-    p_tui.add_argument(
-        "question",
-        nargs="?",
+    p_dashboard.add_argument(
+        "--port",
+        type=int,
+        default=8111,
+        help="Port for the dashboard server (default: 8111)",
+    )
+    p_dashboard.add_argument(
+        "--db",
         default=None,
-        help="Optional: run this question immediately on start",
-    )
-    p_tui.add_argument(
-        "--agents", "-a",
-        help="Comma-separated list of agent names (default: all enabled)",
-    )
-    p_tui.add_argument(
-        "--cwd", "-d",
-        help="Ignored — kept for backward compatibility",
-    )
-    p_tui.add_argument(
-        "--hours",
-        type=int,
-        default=24,
-        help="Hours of history to show (default: 24)",
-    )
-    p_tui.add_argument(
-        "--limit",
-        type=int,
-        default=6,
-        help="Max sessions to display (default: 6)",
-    )
-
-    # dispatch (send a question to the running TUI)
-    p_dispatch = sub.add_parser(
-        "dispatch",
-        help="Send a question to the running TUI from another terminal",
-    )
-    p_dispatch.add_argument("question", help="The question to dispatch")
-    p_dispatch.add_argument(
-        "--cwd", "-d",
-        help="Working directory for agent subprocesses",
+        help="Path to brainstorm database (default: from config or .data/brainstorm.db)",
     )
 
     args = parser.parse_args()
@@ -750,10 +699,8 @@ def main() -> None:
         _cmd_seed(args)
     elif args.command == "agents":
         _cmd_agents(args)
-    elif args.command == "tui":
-        _cmd_tui(args)
-    elif args.command == "dispatch":
-        _cmd_dispatch(args)
+    elif args.command == "dashboard":
+        _cmd_dashboard(args)
     else:
         parser.print_help()
         sys.exit(1)

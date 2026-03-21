@@ -12,6 +12,42 @@ from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 
 from brainstorm_db import BrainstormDB
+from brainstorm_service import BrainstormService
+from brainstorm_tools import (
+    handle_add_guideline,
+    handle_batch_respond,
+    handle_complete_session,
+    handle_create_feedback,
+    handle_get_briefing,
+    handle_get_consensus,
+    handle_get_feedback,
+    handle_get_onboarding,
+    handle_get_response,
+    handle_get_role,
+    handle_get_role_template,
+    handle_get_round_responses,
+    handle_get_tool_guide,
+    handle_get_workflow,
+    handle_list_feedback,
+    handle_list_guidelines,
+    handle_list_roles,
+    handle_list_rounds,
+    handle_list_sessions,
+    handle_list_tool_guides,
+    handle_new_round,
+    handle_new_session,
+    handle_respond_to_feedback,
+    handle_save_consensus,
+    handle_save_response,
+    handle_session_history,
+    handle_set_agent_definition,
+    handle_set_context,
+    handle_set_role,
+    handle_set_tool_guide,
+    handle_set_workflow_template,
+    handle_suggest_roles,
+    handle_update_feedback_status,
+)
 
 mcp = FastMCP("brainstorm")
 
@@ -20,6 +56,14 @@ _DB_PATH = Path(os.environ.get(
     str(Path(__file__).parent / ".data" / "brainstorm.db"),
 ))
 _db = BrainstormDB(_DB_PATH)
+_svc = BrainstormService(_db)
+
+
+def _json(obj) -> str:
+    """Serialize handler result to JSON string (pass-through if already a string)."""
+    if isinstance(obj, str):
+        return obj
+    return json.dumps(obj, indent=2)
 
 
 # -- Session tools --
@@ -35,8 +79,7 @@ def bs_new_session(topic: str, project: str | None = None) -> str:
     Returns:
         Session info with ID to use in subsequent calls.
     """
-    result = _db.create_session(topic, project)
-    return json.dumps(result, indent=2)
+    return _json(handle_new_session(_db, topic, project))
 
 
 @mcp.tool()
@@ -50,8 +93,7 @@ def bs_list_sessions(status: str | None = None, limit: int = 10) -> str:
     Returns:
         List of sessions.
     """
-    sessions = _db.list_sessions(status, limit)
-    return json.dumps(sessions, indent=2)
+    return _json(handle_list_sessions(_db, status, limit))
 
 
 @mcp.tool()
@@ -64,8 +106,7 @@ def bs_complete_session(session_id: str) -> str:
     Returns:
         Confirmation message.
     """
-    _db.complete_session(session_id)
-    return f"Session {session_id} marked as completed."
+    return handle_complete_session(_db, session_id)
 
 
 # -- Round tools --
@@ -83,8 +124,7 @@ def bs_new_round(session_id: str, objective: str | None = None, question: str | 
     Returns:
         Round info with ID and round number.
     """
-    result = _db.create_round(session_id, objective, question=question)
-    return json.dumps(result, indent=2)
+    return _json(handle_new_round(_db, session_id, objective, question))
 
 
 @mcp.tool()
@@ -97,8 +137,7 @@ def bs_list_rounds(session_id: str) -> str:
     Returns:
         List of rounds with their numbers and objectives.
     """
-    rounds = _db.list_rounds(session_id)
-    return json.dumps(rounds, indent=2)
+    return _json(handle_list_rounds(_db, session_id))
 
 
 # -- Response tools --
@@ -115,8 +154,8 @@ def bs_save_response(round_id: str, agent_name: str, content: str) -> str:
     Returns:
         Confirmation with response ID.
     """
-    result = _db.save_response(round_id, agent_name, content)
-    return json.dumps(result, indent=2)
+    # This is the agent's own MCP server — mark as MCP-sourced (trusted)
+    return _json(handle_save_response(_db, round_id, agent_name, content, mark_mcp_source=True))
 
 
 @mcp.tool()
@@ -130,10 +169,7 @@ def bs_get_response(round_id: str, agent_name: str) -> str:
     Returns:
         The full response content, or error if not found.
     """
-    result = _db.get_response(round_id, agent_name)
-    if not result:
-        return f"No response from {agent_name} in round {round_id}"
-    return json.dumps(result, indent=2)
+    return _json(handle_get_response(_db, round_id, agent_name))
 
 
 @mcp.tool()
@@ -146,8 +182,7 @@ def bs_get_round_responses(round_id: str) -> str:
     Returns:
         All responses for the round.
     """
-    responses = _db.get_round_responses(round_id)
-    return json.dumps(responses, indent=2)
+    return _json(handle_get_round_responses(_db, round_id))
 
 
 # -- Consensus tools --
@@ -164,8 +199,7 @@ def bs_save_consensus(session_id: str, content: str, round_id: str | None = None
     Returns:
         Confirmation with consensus ID and version number.
     """
-    result = _db.save_consensus(session_id, content, round_id)
-    return json.dumps(result, indent=2)
+    return _json(handle_save_consensus(_db, session_id, content, round_id))
 
 
 @mcp.tool()
@@ -178,10 +212,7 @@ def bs_get_consensus(session_id: str) -> str:
     Returns:
         Latest consensus content and version.
     """
-    result = _db.get_latest_consensus(session_id)
-    if not result:
-        return f"No consensus yet for session {session_id}"
-    return json.dumps(result, indent=2)
+    return _json(handle_get_consensus(_db, session_id))
 
 
 # -- Context tools --
@@ -199,8 +230,7 @@ def bs_set_context(session_id: str, context: str) -> str:
     Returns:
         Confirmation message.
     """
-    _db.set_context(session_id, context)
-    return f"Context set for session {session_id}."
+    return handle_set_context(_db, session_id, context)
 
 
 # -- Feedback tools --
@@ -222,8 +252,7 @@ def bs_create_feedback(
     Returns:
         Feedback item info with ID.
     """
-    result = _db.create_feedback_item(session_id, source_round_id, source_agent, title, content)
-    return json.dumps(result, indent=2)
+    return _json(handle_create_feedback(_db, session_id, source_round_id, source_agent, title, content))
 
 
 @mcp.tool()
@@ -237,8 +266,8 @@ def bs_list_feedback(session_id: str, status: str | None = None) -> str:
     Returns:
         List of feedback items.
     """
-    items = _db.list_feedback_items(session_id, status)
-    return json.dumps({"feedback_items": items}, indent=2)
+    # Canonical form: raw list (no wrapper)
+    return _json(handle_list_feedback(_db, session_id, status))
 
 
 @mcp.tool()
@@ -251,10 +280,7 @@ def bs_get_feedback(item_id: str) -> str:
     Returns:
         Feedback item with title, content, status, and all verdicts.
     """
-    result = _db.get_feedback_item(item_id)
-    if not result:
-        return f"Feedback item {item_id} not found."
-    return json.dumps(result, indent=2)
+    return _json(handle_get_feedback(_db, item_id))
 
 
 @mcp.tool()
@@ -274,11 +300,22 @@ def bs_respond_to_feedback(
     Returns:
         Confirmation with response ID.
     """
-    valid_verdicts = ("accept", "reject", "modify")
-    if verdict.lower() not in valid_verdicts:
-        return f"Invalid verdict '{verdict}'. Must be one of: {', '.join(valid_verdicts)}"
-    result = _db.save_feedback_response(item_id, round_id, agent_name, verdict.lower(), reasoning)
-    return json.dumps(result, indent=2)
+    return _json(handle_respond_to_feedback(_db, item_id, round_id, agent_name, verdict, reasoning))
+
+
+@mcp.tool()
+def bs_batch_respond(
+    round_id: str, agent_name: str, verdicts: str,
+) -> str:
+    """Submit verdicts on multiple feedback items in a single call.
+
+    Args:
+        round_id: The current deliberation round.
+        agent_name: Your agent name (copilot, gemini, claude).
+        verdicts: JSON array of objects, each with: item_id, verdict (accept/reject/modify), reasoning.
+            Example: [{"item_id":"fb_xxx","verdict":"accept","reasoning":"..."},...]
+    """
+    return _json(handle_batch_respond(_db, round_id, agent_name, verdicts))
 
 
 @mcp.tool()
@@ -292,8 +329,7 @@ def bs_update_feedback_status(item_id: str, status: str) -> str:
     Returns:
         Confirmation message.
     """
-    _db.update_feedback_status(item_id, status)
-    return f"Feedback item {item_id} status updated to '{status}'."
+    return handle_update_feedback_status(_db, item_id, status)
 
 
 # -- Role tools --
@@ -310,8 +346,7 @@ def bs_set_role(session_id: str, agent_name: str, role: str) -> str:
     Returns:
         Confirmation with role ID.
     """
-    result = _db.set_role(session_id, agent_name, role)
-    return json.dumps(result, indent=2)
+    return _json(handle_set_role(_db, session_id, agent_name, role))
 
 
 @mcp.tool()
@@ -325,10 +360,7 @@ def bs_get_role(session_id: str, agent_name: str) -> str:
     Returns:
         Role description, or message if no role set.
     """
-    result = _db.get_role(session_id, agent_name)
-    if not result:
-        return f"No role set for {agent_name} in session {session_id}."
-    return json.dumps(result, indent=2)
+    return _json(handle_get_role(_db, session_id, agent_name))
 
 
 # -- Guidelines tools --
@@ -344,8 +376,7 @@ def bs_add_guideline(session_id: str, content: str) -> str:
     Returns:
         Guideline info with ID.
     """
-    result = _db.add_guideline(session_id, content)
-    return json.dumps(result, indent=2)
+    return _json(handle_add_guideline(_db, session_id, content))
 
 
 @mcp.tool()
@@ -358,8 +389,7 @@ def bs_list_guidelines(session_id: str) -> str:
     Returns:
         List of guidelines.
     """
-    guidelines = _db.list_guidelines(session_id)
-    return json.dumps(guidelines, indent=2)
+    return _json(handle_list_guidelines(_db, session_id))
 
 
 # -- Briefing tool --
@@ -377,8 +407,7 @@ def bs_get_briefing(session_id: str, agent_name: str) -> str:
     Returns:
         Session context, role (or default role), and guidelines.
     """
-    result = _db.get_agent_briefing(session_id, agent_name)
-    return json.dumps(result, indent=2)
+    return _json(handle_get_briefing(_svc, session_id, agent_name))
 
 
 # -- History tool --
@@ -393,8 +422,7 @@ def bs_session_history(session_id: str) -> str:
     Returns:
         Full session history with all data.
     """
-    result = _db.get_session_history(session_id)
-    return json.dumps(result, indent=2)
+    return _json(handle_session_history(_db, session_id))
 
 
 # -- Onboarding & self-describing tools (agent-facing reads) --
@@ -420,8 +448,7 @@ def bs_get_onboarding(
     Returns:
         Full onboarding briefing with identity, workflow, tools, and optional session data.
     """
-    result = _db.get_onboarding_briefing(agent_name, session_id, round_id)
-    return json.dumps(result, indent=2)
+    return _json(handle_get_onboarding(_db, _svc, agent_name, session_id, round_id))
 
 
 @mcp.tool()
@@ -434,11 +461,7 @@ def bs_get_workflow(name: str = "brainstorm_3phase") -> str:
     Returns:
         Workflow template with phases, rules, and format spec.
     """
-    wf = _db.get_workflow_template(name)
-    if not wf:
-        return f"Workflow '{name}' not found. Run 'seed-defaults' to populate."
-    wf["phases"] = json.loads(wf["phases"])
-    return json.dumps(wf, indent=2)
+    return _json(handle_get_workflow(_db, name))
 
 
 @mcp.tool()
@@ -451,10 +474,7 @@ def bs_get_tool_guide(tool_name: str) -> str:
     Returns:
         Tool guide with phase, purpose, and usage instructions.
     """
-    guide = _db.get_tool_guide(tool_name)
-    if not guide:
-        return f"No guide found for tool '{tool_name}'."
-    return json.dumps(guide, indent=2)
+    return _json(handle_get_tool_guide(_db, tool_name))
 
 
 @mcp.tool()
@@ -467,8 +487,7 @@ def bs_list_tool_guides(phase: str | None = None) -> str:
     Returns:
         List of tool guides.
     """
-    guides = _db.list_tool_guides(phase)
-    return json.dumps(guides, indent=2)
+    return _json(handle_list_tool_guides(_db, phase))
 
 
 # -- Admin tools (create/update global definitions) --
@@ -490,8 +509,7 @@ def bs_set_agent_definition(
     Returns:
         Confirmation with ID and created/updated flag.
     """
-    result = _db.upsert_agent_definition(agent_name, display_name, capabilities, default_role, approach)
-    return json.dumps(result, indent=2)
+    return _json(handle_set_agent_definition(_db, agent_name, display_name, capabilities, default_role, approach))
 
 
 @mcp.tool()
@@ -511,8 +529,7 @@ def bs_set_workflow_template(
     Returns:
         Confirmation with ID, version, and created/updated flag.
     """
-    result = _db.upsert_workflow_template(name, overview, phases_json, convergence_rules, response_format)
-    return json.dumps(result, indent=2)
+    return _json(handle_set_workflow_template(_db, name, overview, phases_json, convergence_rules, response_format))
 
 
 @mcp.tool()
@@ -530,8 +547,7 @@ def bs_set_tool_guide(
     Returns:
         Confirmation with ID and created/updated flag.
     """
-    result = _db.upsert_tool_guide(tool_name, phase, purpose, usage)
-    return json.dumps(result, indent=2)
+    return _json(handle_set_tool_guide(_db, tool_name, phase, purpose, usage))
 
 
 # -- Role Library tools (read-only for agents) --
@@ -547,21 +563,7 @@ def bs_list_roles(agent_name: str | None = None, tag: str | None = None) -> str:
     Returns:
         List of role templates with slug, display_name, description, and usage stats.
     """
-    roles = _db.list_role_templates(agent_name, tag)
-    # Return summary (not full role_text) for listing
-    summary = [
-        {
-            "slug": r["slug"],
-            "display_name": r["display_name"],
-            "agent_name": r["agent_name"],
-            "description": r["description"],
-            "tags": r["tags"],
-            "usage_count": r["usage_count"],
-            "has_behavior_definition": bool(r.get("vision") or r.get("behavior")),
-        }
-        for r in roles
-    ]
-    return json.dumps(summary, indent=2)
+    return _json(handle_list_roles(_db, agent_name, tag))
 
 
 @mcp.tool()
@@ -569,20 +571,26 @@ def bs_suggest_roles(
     topic: str,
     agents: str | None = None,
     top_n: int = 6,
+    diversify: bool = False,
 ) -> str:
     """Suggest role templates appropriate for a brainstorm topic.
+
+    Roles are NOT fixed to models. The recommended pattern is role rotation:
+    each round, ALL agents get the SAME role. Rotate the role each round so
+    every model covers every perspective. Use top_roles ranking to pick which
+    roles to rotate through.
 
     Args:
         topic: The brainstorm topic/question (same string passed to bs_new_session).
         agents: Comma-separated agent names for per-agent suggestions (e.g. "copilot,gemini").
         top_n: Number of top roles to return (default: 6).
+        diversify: If True, assigns unique roles per agent (each slug used once).
+            Default False — all agents get the same top-matched role per round.
 
     Returns JSON with top_roles (ranked by topic match) and assignments (per-agent suggestions).
     Apply suggestions with bs_apply_role(session_id, agent_name, slug).
     """
-    agent_list = [a.strip() for a in agents.split(",") if a.strip()] if agents else []
-    result = _db.suggest_roles(topic, agent_list, top_n=top_n)
-    return json.dumps(result, indent=2)
+    return _json(handle_suggest_roles(_db, topic, agents, top_n, diversify))
 
 
 @mcp.tool()
@@ -595,10 +603,7 @@ def bs_get_role_template(slug: str) -> str:
     Returns:
         Full role template including role_text, approach, tags, and usage stats.
     """
-    result = _db.get_role_template(slug)
-    if not result:
-        return f"Role template '{slug}' not found. Use bs_list_roles() to see available templates."
-    return json.dumps(result, indent=2)
+    return _json(handle_get_role_template(_db, slug))
 
 
 if __name__ == "__main__":

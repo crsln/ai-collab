@@ -70,8 +70,9 @@ Add to your Claude Code MCP settings (`.claude/settings.json` or global settings
 
 ### Configure Agent MCP Access
 
-Each AI agent needs its own MCP server for brainstorm tools. The setup wizard generates the config snippets. Example for Gemini (`.gemini/settings.json`):
+Each AI agent needs its own MCP server instance for brainstorm tools. The setup wizard generates config snippets for each agent. Examples:
 
+**GitHub Copilot** (`~/.copilot/mcp-config.json`):
 ```json
 {
   "mcpServers": {
@@ -81,6 +82,25 @@ Each AI agent needs its own MCP server for brainstorm tools. The setup wizard ge
     }
   }
 }
+```
+
+**Google Gemini** (`.gemini/settings.json` in your project):
+```json
+{
+  "mcpServers": {
+    "brainstorm": {
+      "command": "python",
+      "args": ["/path/to/ai-collab/brainstorm_server.py"]
+    }
+  }
+}
+```
+
+**OpenAI Codex** (`~/.codex/config.toml`):
+```toml
+[mcp_servers.brainstorm]
+command = "python"
+args = ["/path/to/ai-collab/brainstorm_server.py"]
 ```
 
 ## Usage
@@ -116,16 +136,17 @@ Use the `/multi-ai-brainstorm` skill for full 3-phase brainstorming sessions. Se
 ```
 Claude Code (orchestrator)
   ├── mcp_server.py — MCP tools: ask_agent, list_agents, ask_agents, bs_* (brainstorm)
-  │    └── _run_agent() passes cwd to provider.read_response(cwd=cwd)
-  ├── brainstorm_server.py — MCP server for agent instances (feedback/session tools)
-  ├── brainstorm_db.py — SQLite persistence (WAL mode, 11 tables)
-  ├── brainstorm_cli.py — CLI for direct DB access
+  ├── brainstorm_server.py — Agent-facing MCP server (brainstorm tools)
+  ├── brainstorm_tools.py — Shared tool handlers (used by both servers)
+  ├── brainstorm_service.py — Orchestration logic: onboarding, phase detection, gates
+  ├── brainstorm_db.py — SQLite persistence (WAL mode, CRUD/DDL only)
   ├── brainstorm_seeds.py — Default agent definitions, workflow templates, tool guides
-  ├── config.py — TOML config loading + agent registry
+  ├── config.py — TOML config loading + agent registry (BUILTIN_AGENTS)
+  ├── dashboard.py + dashboard.html — Web dashboard for session visualization
   └── providers/
-       ├── base.py — Abstract Provider interface (read_response accepts cwd)
-       ├── generic.py — GenericCLIProvider (passes cwd to subprocess)
+       ├── generic.py — GenericCLIProvider (subprocess dispatch with error handling)
        ├── copilot.py — Copilot-specific output parsing
+       ├── codex.py — Codex-specific provider (exec mode)
        └── gemini.py — Gemini-specific output parsing
 ```
 

@@ -6,7 +6,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import pytest
-from config import AgentConfig, AppConfig, load_config, _BUILTIN_AGENTS
+from config import AgentConfig, AppConfig, load_config, BUILTIN_AGENTS
 
 
 class TestAgentConfig:
@@ -32,13 +32,13 @@ class TestAgentConfig:
 
 class TestBuiltinDefaults:
     def test_copilot_defined(self):
-        assert "copilot" in _BUILTIN_AGENTS
+        assert "copilot" in BUILTIN_AGENTS
 
     def test_gemini_defined(self):
-        assert "gemini" in _BUILTIN_AGENTS
+        assert "gemini" in BUILTIN_AGENTS
 
     def test_builtin_agents_have_required_fields(self):
-        for name, agent in _BUILTIN_AGENTS.items():
+        for name, agent in BUILTIN_AGENTS.items():
             assert "command" in agent
             assert "args" in agent
             assert "{prompt}" in " ".join(agent["args"])

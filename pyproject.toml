@@ -29,20 +29,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-tui = [
-    "textual>=0.40.0",
-]
 dev = [
     "pytest",
     "ruff",
 ]
-all = [
-    "ai-collab[tui]",
-]
 
 [project.scripts]
 ai-collab = "ai_collab_cli:main"
-ai-collab-tui = "ai_collab_tui:main"
+ai-collab-dashboard = "dashboard:main"
 
 [tool.hatch.build.targets.wheel]
 packages = [
@@ -57,4 +51,5 @@ packages = [
 "brainstorm_cli.py" = "brainstorm_cli.py"
 "config.py" = "config.py"
 "ai_collab_cli.py" = "ai_collab_cli.py"
-"ai_collab_tui.py" = "ai_collab_tui.py"
+"dashboard.py" = "dashboard.py"
+"dashboard.html" = "dashboard.html"

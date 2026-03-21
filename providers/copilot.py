@@ -17,7 +17,7 @@ class CopilotProvider(GenericCLIProvider):
             agent_config = AgentConfig(
                 name="copilot",
                 command="copilot",
-                args=["-p", "{prompt}", "--allow-all"],
+                args=["-p", "{prompt}", "--allow-all", "--allow-tool", "brainstorm", "atlas"],
                 display_name="GitHub Copilot",
                 description="Code analysis, shell commands, git operations, GitHub CLI",
             )

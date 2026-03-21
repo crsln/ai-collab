@@ -70,10 +70,10 @@ class AppConfig:
 
 # ── Built-in Agent Defaults ────────────────────────────────────────────
 
-_BUILTIN_AGENTS: dict[str, dict] = {
+BUILTIN_AGENTS: dict[str, dict] = {
     "copilot": {
         "command": "copilot",
-        "args": ["-p", "{prompt}", "--allow-all", "--allow-tool", "brainstorm", "--allow-tool", "atlas"],
+        "args": ["-p", "{prompt}", "--allow-all", "--allow-tool", "brainstorm", "atlas"],
         "display_name": "GitHub Copilot",
         "description": "Code analysis, shell commands, git operations, GitHub CLI",
     },
@@ -85,7 +85,7 @@ _BUILTIN_AGENTS: dict[str, dict] = {
     },
     "codex": {
         "command": "codex",
-        "args": ["-p", "{prompt}", "--full-auto"],
+        "args": ["exec", "-p", "{prompt}", "--full-auto"],
         "enabled": False,  # opt-in: most users won't have codex installed
         "display_name": "OpenAI Codex",
         "description": "Code generation, file editing, implementing specs from plans",
@@ -160,7 +160,7 @@ def load_config() -> AppConfig:
             )
     elif not config_file:
         # No config file found — use built-in defaults
-        for name, defaults in _BUILTIN_AGENTS.items():
+        for name, defaults in BUILTIN_AGENTS.items():
             config.agents[name] = AgentConfig(name=name, **defaults)
 
     return config

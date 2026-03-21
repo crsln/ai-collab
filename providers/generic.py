@@ -11,7 +11,7 @@ import sys
 
 from config import AgentConfig, DEFAULT_AGENT_TIMEOUT
 from providers.base import Provider
-from providers.errors import ProviderTimeout, ProviderUnavailable
+from providers.errors import ProviderExecution, ProviderTimeout, ProviderUnavailable
 
 log = logging.getLogger("ai-collab.generic")
 
@@ -94,6 +94,10 @@ class GenericCLIProvider(Provider):
             proc.kill()
             await proc.wait()
             raise ProviderTimeout(self.name, timeout)
+
+        if proc.returncode != 0:
+            err_text = stderr.decode("utf-8", errors="replace").strip() if stderr else ""
+            raise ProviderExecution(self.name, proc.returncode, err_text)
 
         output = stdout.decode("utf-8", errors="replace")
         return self._clean_output(output)
