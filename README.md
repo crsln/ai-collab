@@ -27,12 +27,6 @@ All communication happens through a shared SQLite database. Each agent has its o
 ### Install
 
 ```bash
-pip install ai-collab
-```
-
-Or for development:
-
-```bash
 git clone https://github.com/YOUR_USERNAME/ai-collab.git
 cd ai-collab
 pip install -e .
