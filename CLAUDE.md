@@ -1,32 +1,70 @@
 # ai-collab
 
-MCP server for multi-AI collaboration. Delegate questions to any configured AI CLI agent
-and run structured brainstorming sessions backed by SQLite.
+## IMPORTANT: What This Is
 
-## Setup
+ai-collab is an **MCP server** that Claude Code connects to. It is **NOT** a standalone CLI tool.
+
+Two MCP servers exist — both MUST be configured for the system to work:
+
+1. **`mcp_server.py`** → Claude Code's MCP server (configured in `.mcp.json` or Claude settings)
+   - Provides: `ask_agent`, `ask_agents`, `list_agents`, and all `bs_*` brainstorm tools
+2. **`brainstorm_server.py`** → Agent-facing MCP server (configured in each agent's MCP settings)
+   - Provides: `bs_get_onboarding`, `bs_save_response`, `bs_respond_to_feedback`, etc.
+   - Each agent (Copilot, Gemini, Codex) needs this configured separately
+
+The `providers/` directory contains **subprocess adapters** that `mcp_server.py` uses internally
+to dispatch prompts to agent CLIs — they are NOT standalone CLI tools.
+
+Without MCP configuration, this project does nothing. Run `ai-collab init` to generate all configs.
+
+## First-Time Setup
 
 ```bash
-# Install
+# 1. Install
 pip install -e .
 
-# Interactive setup — detects installed CLIs, generates config
+# 2. Run the setup wizard — detects installed CLIs, generates config, seeds DB
 ai-collab init
 
-# Or manually: copy and edit the config template
-cp ai-collab.toml.example ai-collab.toml
+# 3. The wizard outputs MCP config snippets. Copy them to:
+#    - Claude Code: .mcp.json (project-level) or ~/.claude/settings.json (global)
+#    - Copilot: ~/.copilot/mcp-config.json
+#    - Gemini: .gemini/settings.json (project-level)
+#    - Codex: ~/.codex/config.toml
+
+# 4. Restart Claude Code to pick up the new MCP server
+
+# 5. Test — this should show your configured agents:
+#    Use list_agents()
 ```
+
+**Windows note:** MCP configs must use the full path to `python.exe`, not just `"python"`.
+The setup wizard generates correct absolute paths automatically.
 
 ## Architecture
 
 ```
-Claude Code (orchestrator)
-  ├── mcp_server.py — MCP tools: ask_agent, list_agents, ask_agents, bs_* (brainstorm)
-  ├── brainstorm_server.py — MCP server for agent instances (feedback/session tools)
-  ├── brainstorm_db.py — SQLite DB logic (.data/brainstorm.db)
-  ├── brainstorm_cli.py — CLI for direct DB access
-  ├── config.py — TOML config loading + agent registry
-  └── providers/ — CLI adapters (GenericCLIProvider + specialized subclasses)
+User asks Claude Code to brainstorm
+  │
+  ├── Claude Code connects to mcp_server.py (via MCP)
+  │     ├── ask_agent / ask_agents → dispatches via providers/ (subprocess)
+  │     ├── bs_run_round → dispatches all agents in parallel
+  │     └── bs_* tools → reads/writes brainstorm.db
+  │
+  ├── brainstorm.db (shared SQLite database — single source of truth)
+  │
+  └── Each agent (Copilot/Gemini/Codex) connects to brainstorm_server.py (via MCP)
+        ├── bs_get_onboarding → discovers task, role, workflow
+        ├── bs_save_response → saves analysis
+        └── bs_respond_to_feedback / bs_batch_respond → votes on findings
 ```
+
+Key files:
+- `brainstorm_tools.py` — Shared tool handlers (both servers import from here)
+- `brainstorm_service.py` — Orchestration logic (onboarding builder, phase detection, gates)
+- `brainstorm_db.py` — SQLite CRUD/DDL
+- `config.py` — TOML config loading + agent registry (`BUILTIN_AGENTS`)
+- `brainstorm_seeds.py` — Default data (agent definitions, workflows, tool guides, roles)
 
 ## Configuration
 

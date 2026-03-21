@@ -139,21 +139,44 @@ Use the `/multi-ai-brainstorm` skill for full 3-phase brainstorming sessions. Se
 
 ## Architecture
 
+> **Note:** ai-collab is an MCP server, not a CLI tool. The `providers/` directory contains
+> internal subprocess adapters — they dispatch prompts to agent CLIs on behalf of `mcp_server.py`.
+
+### Data Flow
+
 ```
-Claude Code (orchestrator)
-  ├── mcp_server.py — MCP tools: ask_agent, list_agents, ask_agents, bs_* (brainstorm)
-  ├── brainstorm_server.py — Agent-facing MCP server (brainstorm tools)
-  ├── brainstorm_tools.py — Shared tool handlers (used by both servers)
-  ├── brainstorm_service.py — Orchestration logic: onboarding, phase detection, gates
-  ├── brainstorm_db.py — SQLite persistence (WAL mode, CRUD/DDL only)
-  ├── brainstorm_seeds.py — Default agent definitions, workflow templates, tool guides
-  ├── config.py — TOML config loading + agent registry (BUILTIN_AGENTS)
-  ├── dashboard.py + dashboard.html — Web dashboard for session visualization
-  └── providers/
-       ├── generic.py — GenericCLIProvider (subprocess dispatch with error handling)
-       ├── copilot.py — Copilot-specific output parsing
-       ├── codex.py — Codex-specific provider (exec mode)
-       └── gemini.py — Gemini-specific output parsing
+User asks Claude Code to brainstorm
+  │
+  ├── Claude Code ←──MCP──→ mcp_server.py (orchestrator tools)
+  │     ├── ask_agent / ask_agents → subprocess dispatch via providers/
+  │     ├── bs_run_round → parallel agent dispatch with fail-fast gates
+  │     └── bs_* tools → brainstorm.db read/write
+  │
+  ├── brainstorm.db (shared SQLite — single source of truth)
+  │
+  └── Each agent (Copilot/Gemini/Codex) ←──MCP──→ brainstorm_server.py
+        ├── bs_get_onboarding → discover task, role, workflow, prior work
+        ├── bs_save_response → save analysis
+        └── bs_batch_respond → vote on all feedback items at once
+```
+
+### File Structure
+
+```
+ai-collab/
+  ├── mcp_server.py          — Claude Code's MCP server (orchestrator tools)
+  ├── brainstorm_server.py    — Agent-facing MCP server (brainstorm tools)
+  ├── brainstorm_tools.py     — Shared tool handlers (both servers import)
+  ├── brainstorm_service.py   — Orchestration logic: onboarding, phase detection, gates
+  ├── brainstorm_db.py        — SQLite persistence (WAL mode, CRUD/DDL)
+  ├── brainstorm_seeds.py     — Default data: agent defs, workflows, tool guides, roles
+  ├── config.py               — TOML config + agent registry (BUILTIN_AGENTS)
+  ├── dashboard.py/html       — Web dashboard for session visualization
+  └── providers/              — Internal subprocess adapters (NOT standalone tools)
+       ├── generic.py         — GenericCLIProvider (subprocess + error handling)
+       ├── copilot.py         — Copilot output parsing
+       ├── codex.py           — Codex provider (exec mode)
+       └── gemini.py          — Gemini output parsing
 ```
 
 ## Configuration
