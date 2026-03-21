@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::*;
-use rmcp::{tool, tool_handler, tool_router, ServerHandler};
+use rmcp::{ServerHandler, tool, tool_handler, tool_router};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
@@ -72,7 +72,9 @@ pub struct RespondToFeedbackParams {
 pub struct ListFeedbackParams {
     #[schemars(description = "Session ID")]
     pub session_id: String,
-    #[schemars(description = "Filter by status: pending, accepted, rejected, modified, consolidated")]
+    #[schemars(
+        description = "Filter by status: pending, accepted, rejected, modified, consolidated"
+    )]
     #[serde(default)]
     pub status: Option<String>,
 }
@@ -134,7 +136,9 @@ impl AgentServer {
     // Onboarding & Briefing
     // -----------------------------------------------------------------------
 
-    #[tool(description = "Get onboarding information — agent definition, workflow, tools, session context, and current task")]
+    #[tool(
+        description = "Get onboarding information — agent definition, workflow, tools, session context, and current task"
+    )]
     fn bs_get_onboarding(&self, Parameters(params): Parameters<GetOnboardingParams>) -> String {
         let db = self.db.lock().unwrap();
 
@@ -188,7 +192,9 @@ impl AgentServer {
         }))
     }
 
-    #[tool(description = "Get a session briefing — session info, context, rounds summary, and roles")]
+    #[tool(
+        description = "Get a session briefing — session info, context, rounds summary, and roles"
+    )]
     fn bs_get_briefing(&self, Parameters(params): Parameters<GetBriefingParams>) -> String {
         let db = self.db.lock().unwrap();
         let sid = SessionId::from(params.session_id.as_str());
@@ -198,7 +204,7 @@ impl AgentServer {
             Ok(None) => {
                 return json_result(&serde_json::json!({
                     "error": format!("Session '{}' not found", params.session_id)
-                }))
+                }));
             }
             Err(e) => return json_result(&serde_json::json!({"error": e.to_string()})),
         };
@@ -323,7 +329,10 @@ impl AgentServer {
     // -----------------------------------------------------------------------
 
     #[tool(description = "Get the workflow template defining the 3-phase brainstorm process")]
-    fn bs_get_workflow(&self, #[allow(unused_variables)] Parameters(_params): Parameters<()>) -> String {
+    fn bs_get_workflow(
+        &self,
+        #[allow(unused_variables)] Parameters(_params): Parameters<()>,
+    ) -> String {
         let db = self.db.lock().unwrap();
         match db.get_workflow_template("multi-ai-brainstorm") {
             Ok(Some(workflow)) => json_result(&workflow),

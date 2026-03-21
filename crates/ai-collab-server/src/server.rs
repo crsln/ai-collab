@@ -8,14 +8,14 @@ use std::sync::{Arc, Mutex};
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::*;
-use rmcp::{tool, tool_handler, tool_router, ErrorData as McpError, ServerHandler};
+use rmcp::{ErrorData as McpError, ServerHandler, tool, tool_handler, tool_router};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
 use ai_collab_config::AgentConfig;
 use ai_collab_core::*;
 use ai_collab_db::BrainstormDb;
-use ai_collab_provider::{get_provider, AgentRunConfig};
+use ai_collab_provider::{AgentRunConfig, get_provider};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -141,7 +141,9 @@ pub struct CreateFeedbackParams {
 pub struct ListFeedbackParams {
     #[schemars(description = "Session ID")]
     pub session_id: String,
-    #[schemars(description = "Filter by status: pending, accepted, rejected, modified, consolidated")]
+    #[schemars(
+        description = "Filter by status: pending, accepted, rejected, modified, consolidated"
+    )]
     #[serde(default)]
     pub status: Option<String>,
 }
@@ -332,7 +334,10 @@ impl OrchestratorServer {
     // -----------------------------------------------------------------------
 
     #[tool(description = "List all enabled agents from configuration")]
-    fn list_agents(&self, #[allow(unused_variables)] Parameters(_params): Parameters<()>) -> String {
+    fn list_agents(
+        &self,
+        #[allow(unused_variables)] Parameters(_params): Parameters<()>,
+    ) -> String {
         let enabled = ai_collab_config::get_enabled_agents(&self.config);
         let agents: Vec<serde_json::Value> = enabled
             .iter()
@@ -350,20 +355,19 @@ impl OrchestratorServer {
         json_result(&agents)
     }
 
-    #[tool(description = "Ask a specific agent a question. Runs the agent CLI subprocess and returns its response.")]
+    #[tool(
+        description = "Ask a specific agent a question. Runs the agent CLI subprocess and returns its response."
+    )]
     async fn ask_agent(
         &self,
         Parameters(params): Parameters<AskAgentParams>,
     ) -> Result<CallToolResult, McpError> {
-        let cfg = self
-            .config
-            .get(&params.agent_name)
-            .ok_or_else(|| {
-                McpError::invalid_params(
-                    format!("Agent '{}' not found in config", params.agent_name),
-                    None,
-                )
-            })?;
+        let cfg = self.config.get(&params.agent_name).ok_or_else(|| {
+            McpError::invalid_params(
+                format!("Agent '{}' not found in config", params.agent_name),
+                None,
+            )
+        })?;
 
         let run_config = AgentRunConfig {
             name: cfg.name.clone(),
@@ -417,7 +421,9 @@ impl OrchestratorServer {
         let db = self.db.lock().unwrap();
         let sid = SessionId::from(params.session_id.as_str());
         match db.set_context(&sid, &params.context) {
-            Ok(()) => json_result(&serde_json::json!({"status": "ok", "session_id": params.session_id})),
+            Ok(()) => {
+                json_result(&serde_json::json!({"status": "ok", "session_id": params.session_id}))
+            }
             Err(e) => json_result(&serde_json::json!({"error": e.to_string()})),
         }
     }
@@ -427,12 +433,16 @@ impl OrchestratorServer {
         let db = self.db.lock().unwrap();
         let sid = SessionId::from(params.session_id.as_str());
         match db.complete_session(&sid) {
-            Ok(()) => json_result(&serde_json::json!({"status": "completed", "session_id": params.session_id})),
+            Ok(()) => json_result(
+                &serde_json::json!({"status": "completed", "session_id": params.session_id}),
+            ),
             Err(e) => json_result(&serde_json::json!({"error": e.to_string()})),
         }
     }
 
-    #[tool(description = "Get full session history including rounds, responses, feedback, roles, and consensus")]
+    #[tool(
+        description = "Get full session history including rounds, responses, feedback, roles, and consensus"
+    )]
     fn bs_session_history(&self, Parameters(params): Parameters<SessionIdParams>) -> String {
         let db = self.db.lock().unwrap();
         let sid = SessionId::from(params.session_id.as_str());
@@ -450,7 +460,11 @@ impl OrchestratorServer {
     fn bs_new_round(&self, Parameters(params): Parameters<NewRoundParams>) -> String {
         let db = self.db.lock().unwrap();
         let sid = SessionId::from(params.session_id.as_str());
-        match db.create_round(&sid, params.objective.as_deref(), params.question.as_deref()) {
+        match db.create_round(
+            &sid,
+            params.objective.as_deref(),
+            params.question.as_deref(),
+        ) {
             Ok(round) => json_result(&round),
             Err(e) => json_result(&serde_json::json!({"error": e.to_string()})),
         }
@@ -466,7 +480,9 @@ impl OrchestratorServer {
         }
     }
 
-    #[tool(description = "Check round completion status — returns participants and whether all have responded")]
+    #[tool(
+        description = "Check round completion status — returns participants and whether all have responded"
+    )]
     fn bs_check_round_status(&self, Parameters(params): Parameters<RoundIdParams>) -> String {
         let db = self.db.lock().unwrap();
         let rid = RoundId::from(params.round_id.as_str());
@@ -548,8 +564,13 @@ impl OrchestratorServer {
         let db = self.db.lock().unwrap();
         let sid = SessionId::from(params.session_id.as_str());
         let rid = RoundId::from(params.source_round_id.as_str());
-        match db.create_feedback_item(&sid, &rid, &params.source_agent, &params.title, &params.content)
-        {
+        match db.create_feedback_item(
+            &sid,
+            &rid,
+            &params.source_agent,
+            &params.title,
+            &params.content,
+        ) {
             Ok(item) => json_result(&item),
             Err(e) => json_result(&serde_json::json!({"error": e.to_string()})),
         }
@@ -626,7 +647,9 @@ impl OrchestratorServer {
         }
     }
 
-    #[tool(description = "Check feedback vote completeness — shows which agents have voted on which items")]
+    #[tool(
+        description = "Check feedback vote completeness — shows which agents have voted on which items"
+    )]
     fn bs_check_feedback_status(
         &self,
         Parameters(params): Parameters<CheckFeedbackStatusParams>,
@@ -741,7 +764,9 @@ impl OrchestratorServer {
         }
     }
 
-    #[tool(description = "List role templates from the library, optionally filtered by agent or tag")]
+    #[tool(
+        description = "List role templates from the library, optionally filtered by agent or tag"
+    )]
     fn bs_list_roles(&self, Parameters(params): Parameters<ListRoleTemplatesParams>) -> String {
         let db = self.db.lock().unwrap();
         match db.list_role_templates(params.agent_name.as_deref(), params.tag.as_deref()) {
@@ -795,10 +820,7 @@ impl OrchestratorServer {
         // Filter by agent names if provided (keep only templates assignable to those agents)
         if let Some(ref agents) = params.agents {
             templates.retain(|t| {
-                t.agent_name.is_none()
-                    || t.agent_name
-                        .as_ref()
-                        .is_some_and(|a| agents.contains(a))
+                t.agent_name.is_none() || t.agent_name.as_ref().is_some_and(|a| agents.contains(a))
             });
         }
 
@@ -810,14 +832,13 @@ impl OrchestratorServer {
             .map(|t| {
                 let text = format!(
                     "{} {} {} {}",
-                    t.display_name, t.description, t.role_text,
+                    t.display_name,
+                    t.description,
+                    t.role_text,
                     t.tags.join(" ")
                 )
                 .to_lowercase();
-                let score: f64 = topic_words
-                    .iter()
-                    .filter(|w| text.contains(**w))
-                    .count() as f64;
+                let score: f64 = topic_words.iter().filter(|w| text.contains(**w)).count() as f64;
                 // Boost by usage_count (less used = more interesting for diversity)
                 let usage_penalty = (t.usage_count as f64) * 0.1;
                 (score - usage_penalty, t)
@@ -875,7 +896,9 @@ impl OrchestratorServer {
     // Meta / Onboarding tools
     // -----------------------------------------------------------------------
 
-    #[tool(description = "Get onboarding information for an agent — agent definition, workflow, tools, session context")]
+    #[tool(
+        description = "Get onboarding information for an agent — agent definition, workflow, tools, session context"
+    )]
     fn bs_get_onboarding(&self, Parameters(params): Parameters<GetOnboardingParams>) -> String {
         let db = self.db.lock().unwrap();
 
@@ -919,7 +942,10 @@ impl OrchestratorServer {
     }
 
     #[tool(description = "Get the workflow template defining the 3-phase brainstorm process")]
-    fn bs_get_workflow(&self, #[allow(unused_variables)] Parameters(_params): Parameters<()>) -> String {
+    fn bs_get_workflow(
+        &self,
+        #[allow(unused_variables)] Parameters(_params): Parameters<()>,
+    ) -> String {
         let db = self.db.lock().unwrap();
         match db.get_workflow_template("multi-ai-brainstorm") {
             Ok(Some(workflow)) => json_result(&workflow),

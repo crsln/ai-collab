@@ -23,9 +23,7 @@ pub fn builtin_agents() -> BTreeMap<String, AgentToml> {
             timeout: None,
             enabled: Some(true),
             display_name: Some("GitHub Copilot".into()),
-            description: Some(
-                "Code analysis, shell commands, git operations, GitHub CLI".into(),
-            ),
+            description: Some("Code analysis, shell commands, git operations, GitHub CLI".into()),
         },
     );
 

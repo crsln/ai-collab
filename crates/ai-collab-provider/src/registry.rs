@@ -24,9 +24,10 @@ impl AgentRunConfig {
             .map(|a| a.replace("{prompt}", prompt))
             .collect();
         if let Some(ref model) = self.model
-            && !model.is_empty() {
-                result.extend(["--model".to_string(), model.clone()]);
-            }
+            && !model.is_empty()
+        {
+            result.extend(["--model".to_string(), model.clone()]);
+        }
         result
     }
 }
@@ -40,11 +41,7 @@ pub enum ProviderInstance {
 
 impl ProviderInstance {
     /// Execute a prompt and return the agent's response.
-    pub async fn execute(
-        &self,
-        prompt: &str,
-        cwd: Option<&str>,
-    ) -> Result<String, ProviderError> {
+    pub async fn execute(&self, prompt: &str, cwd: Option<&str>) -> Result<String, ProviderError> {
         match self {
             Self::Generic(p) => p.execute(prompt, cwd).await,
             Self::Copilot(p) => p.execute(prompt, cwd).await,

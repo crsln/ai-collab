@@ -7,4 +7,4 @@ pub mod generic;
 pub mod registry;
 
 pub use generic::{CopilotProvider, GeminiProvider, GenericCLIProvider};
-pub use registry::{get_provider, AgentRunConfig, ProviderInstance};
+pub use registry::{AgentRunConfig, ProviderInstance, get_provider};

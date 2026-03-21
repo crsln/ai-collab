@@ -3,8 +3,8 @@
 use std::process::Stdio;
 use std::time::Duration;
 
-use ai_collab_core::traits::AnsiStrip;
 use ai_collab_core::ProviderError;
+use ai_collab_core::traits::AnsiStrip;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use tokio::time::timeout;
@@ -51,11 +51,7 @@ impl GenericCLIProvider {
     }
 
     /// Run the CLI as a subprocess and return cleaned output.
-    pub async fn execute(
-        &self,
-        prompt: &str,
-        cwd: Option<&str>,
-    ) -> Result<String, ProviderError> {
+    pub async fn execute(&self, prompt: &str, cwd: Option<&str>) -> Result<String, ProviderError> {
         let cmd = self.find_cmd()?;
         let timeout_secs = self.config.timeout;
 
@@ -72,9 +68,10 @@ impl GenericCLIProvider {
                 args.push(arg.clone());
             }
             if let Some(ref model) = self.config.model
-                && !model.is_empty() {
-                    args.extend(["--model".to_string(), model.clone()]);
-                }
+                && !model.is_empty()
+            {
+                args.extend(["--model".to_string(), model.clone()]);
+            }
             Some(prompt.as_bytes().to_vec())
         } else {
             None
@@ -104,10 +101,11 @@ impl GenericCLIProvider {
 
         // Write stdin if needed, then close it
         if let Some(input) = stdin_input
-            && let Some(mut stdin) = child.stdin.take() {
-                stdin.write_all(&input).await?;
-                drop(stdin); // Close stdin to signal EOF
-            }
+            && let Some(mut stdin) = child.stdin.take()
+        {
+            stdin.write_all(&input).await?;
+            drop(stdin); // Close stdin to signal EOF
+        }
 
         // Wait with timeout
         let result = timeout(
@@ -166,11 +164,7 @@ impl CopilotProvider {
         }
     }
 
-    pub async fn execute(
-        &self,
-        prompt: &str,
-        cwd: Option<&str>,
-    ) -> Result<String, ProviderError> {
+    pub async fn execute(&self, prompt: &str, cwd: Option<&str>) -> Result<String, ProviderError> {
         let output = self.inner.execute(prompt, cwd).await?;
         // Strip Copilot's usage footer
         let lines: Vec<&str> = output.lines().collect();
@@ -205,11 +199,7 @@ impl GeminiProvider {
         }
     }
 
-    pub async fn execute(
-        &self,
-        prompt: &str,
-        cwd: Option<&str>,
-    ) -> Result<String, ProviderError> {
+    pub async fn execute(&self, prompt: &str, cwd: Option<&str>) -> Result<String, ProviderError> {
         self.inner.execute(prompt, cwd).await
     }
 

@@ -5,15 +5,13 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 /// Top-level TOML configuration (deserialized from ai-collab.toml).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AppConfig {
     #[serde(default)]
     pub settings: Settings,
     #[serde(default)]
     pub agents: BTreeMap<String, AgentToml>,
 }
-
 
 /// Global settings section.
 #[derive(Debug, Clone, Serialize, Deserialize)]

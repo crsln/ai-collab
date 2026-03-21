@@ -5,7 +5,7 @@
 use std::path::Path;
 
 use chrono::{DateTime, Utc};
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde_json;
 
 use ai_collab_core::{
@@ -93,7 +93,8 @@ impl BrainstormDb {
     }
 
     fn init(conn: Connection) -> Result<Self, DbError> {
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;").db()?;
+        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
+            .db()?;
         conn.execute_batch(SCHEMA).db()?;
         Ok(Self { conn })
     }
@@ -102,17 +103,15 @@ impl BrainstormDb {
     // Sessions
     // -----------------------------------------------------------------------
 
-    pub fn create_session(
-        &self,
-        topic: &str,
-        project: Option<&str>,
-    ) -> Result<Session, DbError> {
+    pub fn create_session(&self, topic: &str, project: Option<&str>) -> Result<Session, DbError> {
         let id = SessionId::new();
         let now = now_rfc3339();
-        self.conn.execute(
-            "INSERT INTO sessions (id, topic, project, created_at) VALUES (?1, ?2, ?3, ?4)",
-            params![id.as_str(), topic, project, now],
-        ).db()?;
+        self.conn
+            .execute(
+                "INSERT INTO sessions (id, topic, project, created_at) VALUES (?1, ?2, ?3, ?4)",
+                params![id.as_str(), topic, project, now],
+            )
+            .db()?;
         Ok(Session {
             id,
             topic: topic.to_string(),
@@ -141,7 +140,8 @@ impl BrainstormDb {
                     created_at: parse_dt(&row.get::<_, String>(5)?),
                 })
             })
-            .optional().db()?;
+            .optional()
+            .db()?;
         Ok(row)
     }
 
@@ -152,44 +152,54 @@ impl BrainstormDb {
     ) -> Result<Vec<Session>, DbError> {
         let mut sessions = Vec::new();
         if let Some(st) = status {
-            let mut stmt = self.conn.prepare(
-                "SELECT id, topic, project, context, status, created_at \
+            let mut stmt = self
+                .conn
+                .prepare(
+                    "SELECT id, topic, project, context, status, created_at \
                  FROM sessions WHERE status = ?1 ORDER BY created_at DESC LIMIT ?2",
-            ).db()?;
-            let rows = stmt.query_map(params![st.to_string(), limit], |row| {
-                Ok(Session {
-                    id: SessionId::from(row.get::<_, String>(0)?),
-                    topic: row.get(1)?,
-                    project: row.get(2)?,
-                    context: row.get(3)?,
-                    status: row
-                        .get::<_, String>(4)?
-                        .parse()
-                        .unwrap_or(SessionStatus::Active),
-                    created_at: parse_dt(&row.get::<_, String>(5)?),
+                )
+                .db()?;
+            let rows = stmt
+                .query_map(params![st.to_string(), limit], |row| {
+                    Ok(Session {
+                        id: SessionId::from(row.get::<_, String>(0)?),
+                        topic: row.get(1)?,
+                        project: row.get(2)?,
+                        context: row.get(3)?,
+                        status: row
+                            .get::<_, String>(4)?
+                            .parse()
+                            .unwrap_or(SessionStatus::Active),
+                        created_at: parse_dt(&row.get::<_, String>(5)?),
+                    })
                 })
-            }).db()?;
+                .db()?;
             for r in rows {
                 sessions.push(r.db()?);
             }
         } else {
-            let mut stmt = self.conn.prepare(
-                "SELECT id, topic, project, context, status, created_at \
+            let mut stmt = self
+                .conn
+                .prepare(
+                    "SELECT id, topic, project, context, status, created_at \
                  FROM sessions ORDER BY created_at DESC LIMIT ?1",
-            ).db()?;
-            let rows = stmt.query_map(params![limit], |row| {
-                Ok(Session {
-                    id: SessionId::from(row.get::<_, String>(0)?),
-                    topic: row.get(1)?,
-                    project: row.get(2)?,
-                    context: row.get(3)?,
-                    status: row
-                        .get::<_, String>(4)?
-                        .parse()
-                        .unwrap_or(SessionStatus::Active),
-                    created_at: parse_dt(&row.get::<_, String>(5)?),
+                )
+                .db()?;
+            let rows = stmt
+                .query_map(params![limit], |row| {
+                    Ok(Session {
+                        id: SessionId::from(row.get::<_, String>(0)?),
+                        topic: row.get(1)?,
+                        project: row.get(2)?,
+                        context: row.get(3)?,
+                        status: row
+                            .get::<_, String>(4)?
+                            .parse()
+                            .unwrap_or(SessionStatus::Active),
+                        created_at: parse_dt(&row.get::<_, String>(5)?),
+                    })
                 })
-            }).db()?;
+                .db()?;
             for r in rows {
                 sessions.push(r.db()?);
             }
@@ -198,10 +208,12 @@ impl BrainstormDb {
     }
 
     pub fn set_context(&self, session_id: &SessionId, context: &str) -> Result<(), DbError> {
-        self.conn.execute(
-            "UPDATE sessions SET context = ?1 WHERE id = ?2",
-            params![context, session_id.as_str()],
-        ).db()?;
+        self.conn
+            .execute(
+                "UPDATE sessions SET context = ?1 WHERE id = ?2",
+                params![context, session_id.as_str()],
+            )
+            .db()?;
         Ok(())
     }
 
@@ -213,16 +225,19 @@ impl BrainstormDb {
                 params![session_id.as_str()],
                 |row| row.get(0),
             )
-            .optional().db()?
+            .optional()
+            .db()?
             .flatten();
         Ok(ctx)
     }
 
     pub fn complete_session(&self, session_id: &SessionId) -> Result<(), DbError> {
-        self.conn.execute(
-            "UPDATE sessions SET status = 'completed' WHERE id = ?1",
-            params![session_id.as_str()],
-        ).db()?;
+        self.conn
+            .execute(
+                "UPDATE sessions SET status = 'completed' WHERE id = ?1",
+                params![session_id.as_str()],
+            )
+            .db()?;
         Ok(())
     }
 
@@ -245,11 +260,14 @@ impl BrainstormDb {
              ?3, ?4, ?5)",
             params![id.as_str(), session_id.as_str(), objective, question, now],
         ).db()?;
-        let round_number: i32 = self.conn.query_row(
-            "SELECT round_number FROM rounds WHERE id = ?1",
-            params![id.as_str()],
-            |row| row.get(0),
-        ).db()?;
+        let round_number: i32 = self
+            .conn
+            .query_row(
+                "SELECT round_number FROM rounds WHERE id = ?1",
+                params![id.as_str()],
+                |row| row.get(0),
+            )
+            .db()?;
         Ok(Round {
             id,
             session_id: session_id.clone(),
@@ -261,10 +279,13 @@ impl BrainstormDb {
     }
 
     pub fn get_round(&self, round_id: &RoundId) -> Result<Option<Round>, DbError> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, session_id, round_number, objective, question, created_at \
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, session_id, round_number, objective, question, created_at \
              FROM rounds WHERE id = ?1",
-        ).db()?;
+            )
+            .db()?;
         let row = stmt
             .query_row(params![round_id.as_str()], |row| {
                 Ok(Round {
@@ -276,26 +297,33 @@ impl BrainstormDb {
                     created_at: parse_dt(&row.get::<_, String>(5)?),
                 })
             })
-            .optional().db()?;
+            .optional()
+            .db()?;
         Ok(row)
     }
 
     pub fn list_rounds(&self, session_id: &SessionId) -> Result<Vec<Round>, DbError> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, session_id, round_number, objective, question, created_at \
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, session_id, round_number, objective, question, created_at \
              FROM rounds WHERE session_id = ?1 ORDER BY round_number",
-        ).db()?;
-        let rows = stmt.query_map(params![session_id.as_str()], |row| {
-            Ok(Round {
-                id: RoundId::from(row.get::<_, String>(0)?),
-                session_id: SessionId::from(row.get::<_, String>(1)?),
-                round_number: row.get(2)?,
-                objective: row.get(3)?,
-                question: row.get(4)?,
-                created_at: parse_dt(&row.get::<_, String>(5)?),
+            )
+            .db()?;
+        let rows = stmt
+            .query_map(params![session_id.as_str()], |row| {
+                Ok(Round {
+                    id: RoundId::from(row.get::<_, String>(0)?),
+                    session_id: SessionId::from(row.get::<_, String>(1)?),
+                    round_number: row.get(2)?,
+                    objective: row.get(3)?,
+                    question: row.get(4)?,
+                    created_at: parse_dt(&row.get::<_, String>(5)?),
+                })
             })
-        }).db()?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(|e| DbError::Sqlite(e.to_string()))
+            .db()?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| DbError::Sqlite(e.to_string()))
     }
 
     // -----------------------------------------------------------------------
@@ -310,19 +338,24 @@ impl BrainstormDb {
     ) -> Result<Response, DbError> {
         let id = ResponseId::new();
         let now = now_rfc3339();
-        self.conn.execute(
-            "INSERT INTO responses (id, round_id, agent_name, content, created_at) \
+        self.conn
+            .execute(
+                "INSERT INTO responses (id, round_id, agent_name, content, created_at) \
              VALUES (?1, ?2, ?3, ?4, ?5) \
              ON CONFLICT(round_id, agent_name) DO UPDATE SET \
              content=excluded.content, created_at=excluded.created_at",
-            params![id.as_str(), round_id.as_str(), agent_name, content, now],
-        ).db()?;
+                params![id.as_str(), round_id.as_str(), agent_name, content, now],
+            )
+            .db()?;
         // Fetch the actual ID (may differ on upsert)
-        let actual_id: String = self.conn.query_row(
-            "SELECT id FROM responses WHERE round_id = ?1 AND agent_name = ?2",
-            params![round_id.as_str(), agent_name],
-            |row| row.get(0),
-        ).db()?;
+        let actual_id: String = self
+            .conn
+            .query_row(
+                "SELECT id FROM responses WHERE round_id = ?1 AND agent_name = ?2",
+                params![round_id.as_str(), agent_name],
+                |row| row.get(0),
+            )
+            .db()?;
         Ok(Response {
             id: ResponseId::from(actual_id),
             round_id: round_id.clone(),
@@ -339,10 +372,13 @@ impl BrainstormDb {
         round_id: &RoundId,
         agent_name: &str,
     ) -> Result<Option<Response>, DbError> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, round_id, agent_name, content, quality, source, created_at \
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, round_id, agent_name, content, quality, source, created_at \
              FROM responses WHERE round_id = ?1 AND agent_name = ?2",
-        ).db()?;
+            )
+            .db()?;
         let row = stmt
             .query_row(params![round_id.as_str(), agent_name], |row| {
                 Ok(Response {
@@ -357,29 +393,36 @@ impl BrainstormDb {
                     created_at: parse_dt(&row.get::<_, String>(6)?),
                 })
             })
-            .optional().db()?;
+            .optional()
+            .db()?;
         Ok(row)
     }
 
     pub fn get_round_responses(&self, round_id: &RoundId) -> Result<Vec<Response>, DbError> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, round_id, agent_name, content, quality, source, created_at \
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, round_id, agent_name, content, quality, source, created_at \
              FROM responses WHERE round_id = ?1 ORDER BY created_at",
-        ).db()?;
-        let rows = stmt.query_map(params![round_id.as_str()], |row| {
-            Ok(Response {
-                id: ResponseId::from(row.get::<_, String>(0)?),
-                round_id: RoundId::from(row.get::<_, String>(1)?),
-                agent_name: row.get(2)?,
-                content: row.get(3)?,
-                quality: row
-                    .get::<_, Option<String>>(4)?
-                    .and_then(|s| s.parse().ok()),
-                source: row.get(5)?,
-                created_at: parse_dt(&row.get::<_, String>(6)?),
+            )
+            .db()?;
+        let rows = stmt
+            .query_map(params![round_id.as_str()], |row| {
+                Ok(Response {
+                    id: ResponseId::from(row.get::<_, String>(0)?),
+                    round_id: RoundId::from(row.get::<_, String>(1)?),
+                    agent_name: row.get(2)?,
+                    content: row.get(3)?,
+                    quality: row
+                        .get::<_, Option<String>>(4)?
+                        .and_then(|s| s.parse().ok()),
+                    source: row.get(5)?,
+                    created_at: parse_dt(&row.get::<_, String>(6)?),
+                })
             })
-        }).db()?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(|e| DbError::Sqlite(e.to_string()))
+            .db()?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| DbError::Sqlite(e.to_string()))
     }
 
     // -----------------------------------------------------------------------
@@ -395,24 +438,23 @@ impl BrainstormDb {
         let id = ConsensusId::new();
         let now = now_rfc3339();
         let round_id_str = round_id.map(|r| r.as_str().to_string());
-        self.conn.execute(
-            "INSERT INTO consensus (id, session_id, round_id, version, content, created_at) \
+        self.conn
+            .execute(
+                "INSERT INTO consensus (id, session_id, round_id, version, content, created_at) \
              VALUES (?1, ?2, ?3, \
              (SELECT COALESCE(MAX(version), 0) + 1 FROM consensus WHERE session_id = ?2), \
              ?4, ?5)",
-            params![
-                id.as_str(),
-                session_id.as_str(),
-                round_id_str,
-                content,
-                now
-            ],
-        ).db()?;
-        let version: i32 = self.conn.query_row(
-            "SELECT version FROM consensus WHERE id = ?1",
-            params![id.as_str()],
-            |row| row.get(0),
-        ).db()?;
+                params![id.as_str(), session_id.as_str(), round_id_str, content, now],
+            )
+            .db()?;
+        let version: i32 = self
+            .conn
+            .query_row(
+                "SELECT version FROM consensus WHERE id = ?1",
+                params![id.as_str()],
+                |row| row.get(0),
+            )
+            .db()?;
         Ok(Consensus {
             id,
             session_id: session_id.clone(),
@@ -427,10 +469,13 @@ impl BrainstormDb {
         &self,
         session_id: &SessionId,
     ) -> Result<Option<Consensus>, DbError> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, session_id, round_id, version, content, created_at \
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, session_id, round_id, version, content, created_at \
              FROM consensus WHERE session_id = ?1 ORDER BY version DESC LIMIT 1",
-        ).db()?;
+            )
+            .db()?;
         let row = stmt
             .query_row(params![session_id.as_str()], |row| {
                 Ok(Consensus {
@@ -442,7 +487,8 @@ impl BrainstormDb {
                     created_at: parse_dt(&row.get::<_, String>(5)?),
                 })
             })
-            .optional().db()?;
+            .optional()
+            .db()?;
         Ok(row)
     }
 
@@ -460,20 +506,22 @@ impl BrainstormDb {
     ) -> Result<FeedbackItem, DbError> {
         let id = FeedbackId::new();
         let now = now_rfc3339();
-        self.conn.execute(
-            "INSERT INTO feedback_items \
+        self.conn
+            .execute(
+                "INSERT INTO feedback_items \
              (id, session_id, source_round_id, source_agent, title, content, created_at) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![
-                id.as_str(),
-                session_id.as_str(),
-                source_round_id.as_str(),
-                source_agent,
-                title,
-                content,
-                now
-            ],
-        ).db()?;
+                params![
+                    id.as_str(),
+                    session_id.as_str(),
+                    source_round_id.as_str(),
+                    source_agent,
+                    title,
+                    content,
+                    now
+                ],
+            )
+            .db()?;
         Ok(FeedbackItem {
             id,
             session_id: session_id.clone(),
@@ -497,9 +545,11 @@ impl BrainstormDb {
                 "SELECT id, session_id, source_round_id, source_agent, title, content, status, created_at \
                  FROM feedback_items WHERE session_id = ?1 AND status = ?2 ORDER BY created_at",
             ).db()?;
-            let rows = stmt.query_map(params![session_id.as_str(), st.to_string()], |row| {
-                Ok(Self::row_to_feedback_item(row))
-            }).db()?;
+            let rows = stmt
+                .query_map(params![session_id.as_str(), st.to_string()], |row| {
+                    Ok(Self::row_to_feedback_item(row))
+                })
+                .db()?;
             for r in rows {
                 items.push(r.db()?);
             }
@@ -508,9 +558,11 @@ impl BrainstormDb {
                 "SELECT id, session_id, source_round_id, source_agent, title, content, status, created_at \
                  FROM feedback_items WHERE session_id = ?1 ORDER BY created_at",
             ).db()?;
-            let rows = stmt.query_map(params![session_id.as_str()], |row| {
-                Ok(Self::row_to_feedback_item(row))
-            }).db()?;
+            let rows = stmt
+                .query_map(params![session_id.as_str()], |row| {
+                    Ok(Self::row_to_feedback_item(row))
+                })
+                .db()?;
             for r in rows {
                 items.push(r.db()?);
             }
@@ -547,7 +599,8 @@ impl BrainstormDb {
             .query_row(params![item_id.as_str()], |row| {
                 Ok(Self::row_to_feedback_item(row))
             })
-            .optional().db()?;
+            .optional()
+            .db()?;
         match item {
             Some(fi) => {
                 let responses = self.get_feedback_responses(&fi.id)?;
@@ -562,10 +615,12 @@ impl BrainstormDb {
         item_id: &FeedbackId,
         status: &FeedbackStatus,
     ) -> Result<(), DbError> {
-        self.conn.execute(
-            "UPDATE feedback_items SET status = ?1 WHERE id = ?2",
-            params![status.to_string(), item_id.as_str()],
-        ).db()?;
+        self.conn
+            .execute(
+                "UPDATE feedback_items SET status = ?1 WHERE id = ?2",
+                params![status.to_string(), item_id.as_str()],
+            )
+            .db()?;
         Ok(())
     }
 
@@ -600,13 +655,15 @@ impl BrainstormDb {
             ],
         ).db()?;
         // Update feedback_items_completed counter on round_participants
-        self.conn.execute(
-            "UPDATE round_participants SET feedback_items_completed = (\
+        self.conn
+            .execute(
+                "UPDATE round_participants SET feedback_items_completed = (\
              SELECT COUNT(DISTINCT fr.item_id) FROM feedback_responses fr \
              WHERE fr.round_id = ?1 AND fr.agent_name = ?2\
              ) WHERE round_id = ?1 AND agent_name = ?2",
-            params![round_id.as_str(), agent_name],
-        ).db()?;
+                params![round_id.as_str(), agent_name],
+            )
+            .db()?;
         // Fetch actual ID (may differ on upsert)
         let actual_id: String = self.conn.query_row(
             "SELECT id FROM feedback_responses WHERE item_id = ?1 AND round_id = ?2 AND agent_name = ?3",
@@ -628,22 +685,28 @@ impl BrainstormDb {
         &self,
         item_id: &FeedbackId,
     ) -> Result<Vec<FeedbackResponse>, DbError> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, item_id, round_id, agent_name, verdict, reasoning, created_at \
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, item_id, round_id, agent_name, verdict, reasoning, created_at \
              FROM feedback_responses WHERE item_id = ?1 ORDER BY created_at",
-        ).db()?;
-        let rows = stmt.query_map(params![item_id.as_str()], |row| {
-            Ok(FeedbackResponse {
-                id: FeedbackResponseId::from(row.get::<_, String>(0)?),
-                item_id: FeedbackId::from(row.get::<_, String>(1)?),
-                round_id: RoundId::from(row.get::<_, String>(2)?),
-                agent_name: row.get(3)?,
-                verdict: row.get(4)?,
-                reasoning: row.get(5)?,
-                created_at: parse_dt(&row.get::<_, String>(6)?),
+            )
+            .db()?;
+        let rows = stmt
+            .query_map(params![item_id.as_str()], |row| {
+                Ok(FeedbackResponse {
+                    id: FeedbackResponseId::from(row.get::<_, String>(0)?),
+                    item_id: FeedbackId::from(row.get::<_, String>(1)?),
+                    round_id: RoundId::from(row.get::<_, String>(2)?),
+                    agent_name: row.get(3)?,
+                    verdict: row.get(4)?,
+                    reasoning: row.get(5)?,
+                    created_at: parse_dt(&row.get::<_, String>(6)?),
+                })
             })
-        }).db()?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(|e| DbError::Sqlite(e.to_string()))
+            .db()?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| DbError::Sqlite(e.to_string()))
     }
 
     // -----------------------------------------------------------------------
@@ -673,11 +736,14 @@ impl BrainstormDb {
                 now
             ],
         ).db()?;
-        let actual_id: String = self.conn.query_row(
-            "SELECT id FROM agent_roles WHERE session_id = ?1 AND agent_name = ?2",
-            params![session_id.as_str(), agent_name],
-            |row| row.get(0),
-        ).db()?;
+        let actual_id: String = self
+            .conn
+            .query_row(
+                "SELECT id FROM agent_roles WHERE session_id = ?1 AND agent_name = ?2",
+                params![session_id.as_str(), agent_name],
+                |row| row.get(0),
+            )
+            .db()?;
         Ok(AgentRole {
             id: RoleId::from(actual_id),
             session_id: session_id.clone(),
@@ -693,10 +759,13 @@ impl BrainstormDb {
         session_id: &SessionId,
         agent_name: &str,
     ) -> Result<Option<AgentRole>, DbError> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, session_id, agent_name, role, source_slug, created_at \
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, session_id, agent_name, role, source_slug, created_at \
              FROM agent_roles WHERE session_id = ?1 AND agent_name = ?2",
-        ).db()?;
+            )
+            .db()?;
         let row = stmt
             .query_row(params![session_id.as_str(), agent_name], |row| {
                 Ok(AgentRole {
@@ -708,26 +777,33 @@ impl BrainstormDb {
                     created_at: parse_dt(&row.get::<_, String>(5)?),
                 })
             })
-            .optional().db()?;
+            .optional()
+            .db()?;
         Ok(row)
     }
 
     pub fn list_roles(&self, session_id: &SessionId) -> Result<Vec<AgentRole>, DbError> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, session_id, agent_name, role, source_slug, created_at \
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, session_id, agent_name, role, source_slug, created_at \
              FROM agent_roles WHERE session_id = ?1 ORDER BY agent_name",
-        ).db()?;
-        let rows = stmt.query_map(params![session_id.as_str()], |row| {
-            Ok(AgentRole {
-                id: RoleId::from(row.get::<_, String>(0)?),
-                session_id: SessionId::from(row.get::<_, String>(1)?),
-                agent_name: row.get(2)?,
-                role: row.get(3)?,
-                source_slug: row.get(4)?,
-                created_at: parse_dt(&row.get::<_, String>(5)?),
+            )
+            .db()?;
+        let rows = stmt
+            .query_map(params![session_id.as_str()], |row| {
+                Ok(AgentRole {
+                    id: RoleId::from(row.get::<_, String>(0)?),
+                    session_id: SessionId::from(row.get::<_, String>(1)?),
+                    agent_name: row.get(2)?,
+                    role: row.get(3)?,
+                    source_slug: row.get(4)?,
+                    created_at: parse_dt(&row.get::<_, String>(5)?),
+                })
             })
-        }).db()?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(|e| DbError::Sqlite(e.to_string()))
+            .db()?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| DbError::Sqlite(e.to_string()))
     }
 
     // -----------------------------------------------------------------------
@@ -741,11 +817,13 @@ impl BrainstormDb {
     ) -> Result<Guideline, DbError> {
         let id = GuidelineId::new();
         let now = now_rfc3339();
-        self.conn.execute(
-            "INSERT INTO guidelines (id, session_id, content, created_at) \
+        self.conn
+            .execute(
+                "INSERT INTO guidelines (id, session_id, content, created_at) \
              VALUES (?1, ?2, ?3, ?4)",
-            params![id.as_str(), session_id.as_str(), content, now],
-        ).db()?;
+                params![id.as_str(), session_id.as_str(), content, now],
+            )
+            .db()?;
         Ok(Guideline {
             id,
             session_id: session_id.clone(),
@@ -755,19 +833,25 @@ impl BrainstormDb {
     }
 
     pub fn list_guidelines(&self, session_id: &SessionId) -> Result<Vec<Guideline>, DbError> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, session_id, content, created_at \
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, session_id, content, created_at \
              FROM guidelines WHERE session_id = ?1 ORDER BY created_at",
-        ).db()?;
-        let rows = stmt.query_map(params![session_id.as_str()], |row| {
-            Ok(Guideline {
-                id: GuidelineId::from(row.get::<_, String>(0)?),
-                session_id: SessionId::from(row.get::<_, String>(1)?),
-                content: row.get(2)?,
-                created_at: parse_dt(&row.get::<_, String>(3)?),
+            )
+            .db()?;
+        let rows = stmt
+            .query_map(params![session_id.as_str()], |row| {
+                Ok(Guideline {
+                    id: GuidelineId::from(row.get::<_, String>(0)?),
+                    session_id: SessionId::from(row.get::<_, String>(1)?),
+                    content: row.get(2)?,
+                    created_at: parse_dt(&row.get::<_, String>(3)?),
+                })
             })
-        }).db()?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(|e| DbError::Sqlite(e.to_string()))
+            .db()?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| DbError::Sqlite(e.to_string()))
     }
 
     // -----------------------------------------------------------------------
@@ -792,47 +876,51 @@ impl BrainstormDb {
         let tags_json = serde_json::to_string(&tags.unwrap_or(&[])).db()?;
         let existing = self.get_agent_definition(agent_name)?;
         if existing.is_some() {
-            self.conn.execute(
-                "UPDATE agent_definitions SET display_name=?1, capabilities=?2, \
+            self.conn
+                .execute(
+                    "UPDATE agent_definitions SET display_name=?1, capabilities=?2, \
                  default_role=?3, approach=?4, vision=?5, angle=?6, behavior=?7, \
                  tags=?8, backend_hint=?9, updated_at=?10 WHERE agent_name=?11",
-                params![
-                    display_name,
-                    capabilities,
-                    default_role,
-                    approach,
-                    vision,
-                    angle,
-                    behavior,
-                    tags_json,
-                    backend_hint,
-                    now,
-                    agent_name
-                ],
-            ).db()?;
+                    params![
+                        display_name,
+                        capabilities,
+                        default_role,
+                        approach,
+                        vision,
+                        angle,
+                        behavior,
+                        tags_json,
+                        backend_hint,
+                        now,
+                        agent_name
+                    ],
+                )
+                .db()?;
         } else {
             let id = AgentDefinitionId::new();
-            self.conn.execute(
-                "INSERT INTO agent_definitions \
+            self.conn
+                .execute(
+                    "INSERT INTO agent_definitions \
                  (id, agent_name, display_name, capabilities, default_role, approach, \
                   vision, angle, behavior, tags, backend_hint, created_at, updated_at) \
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
-                params![
-                    id.as_str(),
-                    agent_name,
-                    display_name,
-                    capabilities,
-                    default_role,
-                    approach,
-                    vision,
-                    angle,
-                    behavior,
-                    tags_json,
-                    backend_hint,
-                    now,
-                    now
-                ],
-            ).db()?;
+                    params![
+                        id.as_str(),
+                        agent_name,
+                        display_name,
+                        capabilities,
+                        default_role,
+                        approach,
+                        vision,
+                        angle,
+                        behavior,
+                        tags_json,
+                        backend_hint,
+                        now,
+                        now
+                    ],
+                )
+                .db()?;
         }
         Ok(())
     }
@@ -841,11 +929,14 @@ impl BrainstormDb {
         &self,
         agent_name: &str,
     ) -> Result<Option<AgentDefinition>, DbError> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, agent_name, display_name, capabilities, default_role, approach, \
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, agent_name, display_name, capabilities, default_role, approach, \
              vision, angle, behavior, tags, backend_hint, created_at, updated_at \
              FROM agent_definitions WHERE agent_name = ?1",
-        ).db()?;
+            )
+            .db()?;
         let row = stmt
             .query_row(params![agent_name], |row| {
                 Ok(AgentDefinition {
@@ -864,34 +955,41 @@ impl BrainstormDb {
                     updated_at: parse_dt(&row.get::<_, String>(12)?),
                 })
             })
-            .optional().db()?;
+            .optional()
+            .db()?;
         Ok(row)
     }
 
     pub fn list_agent_definitions(&self) -> Result<Vec<AgentDefinition>, DbError> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, agent_name, display_name, capabilities, default_role, approach, \
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, agent_name, display_name, capabilities, default_role, approach, \
              vision, angle, behavior, tags, backend_hint, created_at, updated_at \
              FROM agent_definitions ORDER BY agent_name",
-        ).db()?;
-        let rows = stmt.query_map([], |row| {
-            Ok(AgentDefinition {
-                id: AgentDefinitionId::from(row.get::<_, String>(0)?),
-                agent_name: row.get(1)?,
-                display_name: row.get(2)?,
-                capabilities: row.get(3)?,
-                default_role: row.get(4)?,
-                approach: row.get(5)?,
-                vision: row.get(6)?,
-                angle: row.get(7)?,
-                behavior: row.get(8)?,
-                tags: parse_json_vec(row.get(9)?),
-                backend_hint: row.get(10)?,
-                created_at: parse_dt(&row.get::<_, String>(11)?),
-                updated_at: parse_dt(&row.get::<_, String>(12)?),
+            )
+            .db()?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(AgentDefinition {
+                    id: AgentDefinitionId::from(row.get::<_, String>(0)?),
+                    agent_name: row.get(1)?,
+                    display_name: row.get(2)?,
+                    capabilities: row.get(3)?,
+                    default_role: row.get(4)?,
+                    approach: row.get(5)?,
+                    vision: row.get(6)?,
+                    angle: row.get(7)?,
+                    behavior: row.get(8)?,
+                    tags: parse_json_vec(row.get(9)?),
+                    backend_hint: row.get(10)?,
+                    created_at: parse_dt(&row.get::<_, String>(11)?),
+                    updated_at: parse_dt(&row.get::<_, String>(12)?),
+                })
             })
-        }).db()?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(|e| DbError::Sqlite(e.to_string()))
+            .db()?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| DbError::Sqlite(e.to_string()))
     }
 
     // -----------------------------------------------------------------------
@@ -910,50 +1008,54 @@ impl BrainstormDb {
         let existing = self.get_workflow_template(name)?;
         if let Some(ex) = existing {
             let new_version = ex.version + 1;
-            self.conn.execute(
-                "UPDATE workflow_templates SET version=?1, overview=?2, phases=?3, \
+            self.conn
+                .execute(
+                    "UPDATE workflow_templates SET version=?1, overview=?2, phases=?3, \
                  convergence_rules=?4, response_format=?5, updated_at=?6 WHERE name=?7",
-                params![
-                    new_version,
-                    overview,
-                    phases_json,
-                    convergence_rules,
-                    response_format,
-                    now,
-                    name
-                ],
-            ).db()?;
+                    params![
+                        new_version,
+                        overview,
+                        phases_json,
+                        convergence_rules,
+                        response_format,
+                        now,
+                        name
+                    ],
+                )
+                .db()?;
         } else {
             let id = WorkflowId::new();
-            self.conn.execute(
-                "INSERT INTO workflow_templates \
+            self.conn
+                .execute(
+                    "INSERT INTO workflow_templates \
                  (id, name, version, overview, phases, convergence_rules, response_format, \
                   created_at, updated_at) \
                  VALUES (?1, ?2, 1, ?3, ?4, ?5, ?6, ?7, ?8)",
-                params![
-                    id.as_str(),
-                    name,
-                    overview,
-                    phases_json,
-                    convergence_rules,
-                    response_format,
-                    now,
-                    now
-                ],
-            ).db()?;
+                    params![
+                        id.as_str(),
+                        name,
+                        overview,
+                        phases_json,
+                        convergence_rules,
+                        response_format,
+                        now,
+                        now
+                    ],
+                )
+                .db()?;
         }
         Ok(())
     }
 
-    pub fn get_workflow_template(
-        &self,
-        name: &str,
-    ) -> Result<Option<WorkflowTemplate>, DbError> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, name, version, overview, phases, convergence_rules, response_format, \
+    pub fn get_workflow_template(&self, name: &str) -> Result<Option<WorkflowTemplate>, DbError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, name, version, overview, phases, convergence_rules, response_format, \
              created_at, updated_at \
              FROM workflow_templates WHERE name = ?1",
-        ).db()?;
+            )
+            .db()?;
         let row = stmt
             .query_row(params![name], |row| {
                 Ok(WorkflowTemplate {
@@ -968,7 +1070,8 @@ impl BrainstormDb {
                     updated_at: parse_dt(&row.get::<_, String>(8)?),
                 })
             })
-            .optional().db()?;
+            .optional()
+            .db()?;
         Ok(row)
     }
 
@@ -986,27 +1089,34 @@ impl BrainstormDb {
         let now = now_rfc3339();
         let existing = self.get_tool_guide(tool_name)?;
         if existing.is_some() {
-            self.conn.execute(
-                "UPDATE tool_guides SET phase=?1, purpose=?2, usage=?3, created_at=?4 \
+            self.conn
+                .execute(
+                    "UPDATE tool_guides SET phase=?1, purpose=?2, usage=?3, created_at=?4 \
                  WHERE tool_name=?5",
-                params![phase, purpose, usage, now, tool_name],
-            ).db()?;
+                    params![phase, purpose, usage, now, tool_name],
+                )
+                .db()?;
         } else {
             let id = ToolGuideId::new();
-            self.conn.execute(
-                "INSERT INTO tool_guides (id, tool_name, phase, purpose, usage, created_at) \
+            self.conn
+                .execute(
+                    "INSERT INTO tool_guides (id, tool_name, phase, purpose, usage, created_at) \
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![id.as_str(), tool_name, phase, purpose, usage, now],
-            ).db()?;
+                    params![id.as_str(), tool_name, phase, purpose, usage, now],
+                )
+                .db()?;
         }
         Ok(())
     }
 
     pub fn get_tool_guide(&self, tool_name: &str) -> Result<Option<ToolGuide>, DbError> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, tool_name, phase, purpose, usage, created_at \
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, tool_name, phase, purpose, usage, created_at \
              FROM tool_guides WHERE tool_name = ?1",
-        ).db()?;
+            )
+            .db()?;
         let row = stmt
             .query_row(params![tool_name], |row| {
                 Ok(ToolGuide {
@@ -1018,48 +1128,56 @@ impl BrainstormDb {
                     created_at: parse_dt(&row.get::<_, String>(5)?),
                 })
             })
-            .optional().db()?;
+            .optional()
+            .db()?;
         Ok(row)
     }
 
-    pub fn list_tool_guides(
-        &self,
-        phase: Option<&str>,
-    ) -> Result<Vec<ToolGuide>, DbError> {
+    pub fn list_tool_guides(&self, phase: Option<&str>) -> Result<Vec<ToolGuide>, DbError> {
         let mut guides = Vec::new();
         if let Some(ph) = phase {
-            let mut stmt = self.conn.prepare(
-                "SELECT id, tool_name, phase, purpose, usage, created_at \
+            let mut stmt = self
+                .conn
+                .prepare(
+                    "SELECT id, tool_name, phase, purpose, usage, created_at \
                  FROM tool_guides WHERE phase = ?1 ORDER BY tool_name",
-            ).db()?;
-            let rows = stmt.query_map(params![ph], |row| {
-                Ok(ToolGuide {
-                    id: ToolGuideId::from(row.get::<_, String>(0)?),
-                    tool_name: row.get(1)?,
-                    phase: row.get(2)?,
-                    purpose: row.get(3)?,
-                    usage: row.get(4)?,
-                    created_at: parse_dt(&row.get::<_, String>(5)?),
+                )
+                .db()?;
+            let rows = stmt
+                .query_map(params![ph], |row| {
+                    Ok(ToolGuide {
+                        id: ToolGuideId::from(row.get::<_, String>(0)?),
+                        tool_name: row.get(1)?,
+                        phase: row.get(2)?,
+                        purpose: row.get(3)?,
+                        usage: row.get(4)?,
+                        created_at: parse_dt(&row.get::<_, String>(5)?),
+                    })
                 })
-            }).db()?;
+                .db()?;
             for r in rows {
                 guides.push(r.db()?);
             }
         } else {
-            let mut stmt = self.conn.prepare(
-                "SELECT id, tool_name, phase, purpose, usage, created_at \
+            let mut stmt = self
+                .conn
+                .prepare(
+                    "SELECT id, tool_name, phase, purpose, usage, created_at \
                  FROM tool_guides ORDER BY phase, tool_name",
-            ).db()?;
-            let rows = stmt.query_map([], |row| {
-                Ok(ToolGuide {
-                    id: ToolGuideId::from(row.get::<_, String>(0)?),
-                    tool_name: row.get(1)?,
-                    phase: row.get(2)?,
-                    purpose: row.get(3)?,
-                    usage: row.get(4)?,
-                    created_at: parse_dt(&row.get::<_, String>(5)?),
+                )
+                .db()?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok(ToolGuide {
+                        id: ToolGuideId::from(row.get::<_, String>(0)?),
+                        tool_name: row.get(1)?,
+                        phase: row.get(2)?,
+                        purpose: row.get(3)?,
+                        usage: row.get(4)?,
+                        created_at: parse_dt(&row.get::<_, String>(5)?),
+                    })
                 })
-            }).db()?;
+                .db()?;
             for r in rows {
                 guides.push(r.db()?);
             }
@@ -1091,29 +1209,31 @@ impl BrainstormDb {
         let now = now_rfc3339();
         let tags_json = serde_json::to_string(&tags.unwrap_or(&[])).db()?;
         let mandates_json = serde_json::to_string(&mandates.unwrap_or(&[])).db()?;
-        self.conn.execute(
-            "INSERT INTO role_library \
+        self.conn
+            .execute(
+                "INSERT INTO role_library \
              (id, slug, display_name, agent_name, description, role_text, approach, \
               vision, angle, behavior, mandates, tags, notes, created_at, updated_at) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
-            params![
-                id.as_str(),
-                slug,
-                display_name,
-                agent_name,
-                description,
-                role_text,
-                approach,
-                vision,
-                angle,
-                behavior,
-                mandates_json,
-                tags_json,
-                notes,
-                now,
-                now
-            ],
-        ).db()?;
+                params![
+                    id.as_str(),
+                    slug,
+                    display_name,
+                    agent_name,
+                    description,
+                    role_text,
+                    approach,
+                    vision,
+                    angle,
+                    behavior,
+                    mandates_json,
+                    tags_json,
+                    notes,
+                    now,
+                    now
+                ],
+            )
+            .db()?;
         Ok(RoleTemplate {
             id,
             slug: slug.to_string(),
@@ -1135,16 +1255,16 @@ impl BrainstormDb {
         })
     }
 
-    pub fn get_role_template(
-        &self,
-        slug_or_id: &str,
-    ) -> Result<Option<RoleTemplate>, DbError> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, slug, display_name, agent_name, description, role_text, approach, \
+    pub fn get_role_template(&self, slug_or_id: &str) -> Result<Option<RoleTemplate>, DbError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, slug, display_name, agent_name, description, role_text, approach, \
              vision, angle, behavior, mandates, tags, usage_count, last_used_at, notes, \
              created_at, updated_at \
              FROM role_library WHERE slug = ?1 OR id = ?1",
-        ).db()?;
+            )
+            .db()?;
         let row = stmt
             .query_row(params![slug_or_id], |row| {
                 Ok(RoleTemplate {
@@ -1167,7 +1287,8 @@ impl BrainstormDb {
                     updated_at: parse_dt(&row.get::<_, String>(16)?),
                 })
             })
-            .optional().db()?;
+            .optional()
+            .db()?;
         Ok(row)
     }
 
@@ -1178,29 +1299,35 @@ impl BrainstormDb {
     ) -> Result<Vec<RoleTemplate>, DbError> {
         let mut templates = Vec::new();
         if let Some(an) = agent_name {
-            let mut stmt = self.conn.prepare(
-                "SELECT id, slug, display_name, agent_name, description, role_text, approach, \
+            let mut stmt = self
+                .conn
+                .prepare(
+                    "SELECT id, slug, display_name, agent_name, description, role_text, approach, \
                  vision, angle, behavior, mandates, tags, usage_count, last_used_at, notes, \
                  created_at, updated_at \
                  FROM role_library WHERE agent_name = ?1 OR agent_name IS NULL \
                  ORDER BY usage_count DESC, display_name",
-            ).db()?;
-            let rows = stmt.query_map(params![an], |row| {
-                Ok(Self::row_to_role_template(row))
-            }).db()?;
+                )
+                .db()?;
+            let rows = stmt
+                .query_map(params![an], |row| Ok(Self::row_to_role_template(row)))
+                .db()?;
             for r in rows {
                 templates.push(r.db()?);
             }
         } else {
-            let mut stmt = self.conn.prepare(
-                "SELECT id, slug, display_name, agent_name, description, role_text, approach, \
+            let mut stmt = self
+                .conn
+                .prepare(
+                    "SELECT id, slug, display_name, agent_name, description, role_text, approach, \
                  vision, angle, behavior, mandates, tags, usage_count, last_used_at, notes, \
                  created_at, updated_at \
                  FROM role_library ORDER BY usage_count DESC, display_name",
-            ).db()?;
-            let rows = stmt.query_map([], |row| {
-                Ok(Self::row_to_role_template(row))
-            }).db()?;
+                )
+                .db()?;
+            let rows = stmt
+                .query_map([], |row| Ok(Self::row_to_role_template(row)))
+                .db()?;
             for r in rows {
                 templates.push(r.db()?);
             }
@@ -1324,10 +1451,12 @@ impl BrainstormDb {
         let existing = self.get_role_template(slug_or_id)?;
         match existing {
             Some(e) => {
-                self.conn.execute(
-                    "DELETE FROM role_library WHERE id = ?1",
-                    params![e.id.as_str()],
-                ).db()?;
+                self.conn
+                    .execute(
+                        "DELETE FROM role_library WHERE id = ?1",
+                        params![e.id.as_str()],
+                    )
+                    .db()?;
                 Ok(true)
             }
             None => Ok(false),
@@ -1388,14 +1517,16 @@ impl BrainstormDb {
     ) -> Result<RoundParticipant, DbError> {
         let id = ParticipantId::new();
         let now = now_rfc3339();
-        self.conn.execute(
-            "INSERT INTO round_participants \
+        self.conn
+            .execute(
+                "INSERT INTO round_participants \
              (id, round_id, agent_name, phase, status, created_at) \
              VALUES (?1, ?2, ?3, ?4, 'pending', ?5) \
              ON CONFLICT(round_id, agent_name) DO UPDATE SET \
              phase=excluded.phase, status='pending', created_at=excluded.created_at",
-            params![id.as_str(), round_id.as_str(), agent_name, phase, now],
-        ).db()?;
+                params![id.as_str(), round_id.as_str(), agent_name, phase, now],
+            )
+            .db()?;
         // Fetch actual record (may differ on upsert)
         let p = self
             .conn
@@ -1406,7 +1537,8 @@ impl BrainstormDb {
                  FROM round_participants WHERE round_id = ?1 AND agent_name = ?2",
                 params![round_id.as_str(), agent_name],
                 |row| Ok(Self::row_to_participant(row)),
-            ).db()?;
+            )
+            .db()?;
         Ok(p)
     }
 
@@ -1430,17 +1562,19 @@ impl BrainstormDb {
             "UPDATE round_participants SET status=?1, response_quality=?2, \
              error_detail=?3, {time_col}=?4 WHERE round_id=?5 AND agent_name=?6"
         );
-        self.conn.execute(
-            &sql,
-            params![
-                status_str,
-                quality_str,
-                error,
-                now,
-                round_id.as_str(),
-                agent_name
-            ],
-        ).db()?;
+        self.conn
+            .execute(
+                &sql,
+                params![
+                    status_str,
+                    quality_str,
+                    error,
+                    now,
+                    round_id.as_str(),
+                    agent_name
+                ],
+            )
+            .db()?;
         Ok(())
     }
 
@@ -1448,16 +1582,22 @@ impl BrainstormDb {
         &self,
         round_id: &RoundId,
     ) -> Result<Vec<RoundParticipant>, DbError> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, round_id, agent_name, phase, status, dispatched_at, responded_at, \
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, round_id, agent_name, phase, status, dispatched_at, responded_at, \
              response_quality, error_detail, retry_count, max_retries, \
              feedback_items_expected, feedback_items_completed, created_at \
              FROM round_participants WHERE round_id = ?1 ORDER BY agent_name",
-        ).db()?;
-        let rows = stmt.query_map(params![round_id.as_str()], |row| {
-            Ok(Self::row_to_participant(row))
-        }).db()?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(|e| DbError::Sqlite(e.to_string()))
+            )
+            .db()?;
+        let rows = stmt
+            .query_map(params![round_id.as_str()], |row| {
+                Ok(Self::row_to_participant(row))
+            })
+            .db()?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| DbError::Sqlite(e.to_string()))
     }
 
     fn row_to_participant(row: &rusqlite::Row<'_>) -> RoundParticipant {
@@ -1499,7 +1639,7 @@ impl BrainstormDb {
             None => {
                 return Ok(serde_json::json!({
                     "error": format!("Session {} not found", session_id)
-                }))
+                }));
             }
         };
 
@@ -1634,9 +1774,7 @@ mod tests {
         let db = db();
         let session = db.create_session("Rounds test", None).unwrap();
 
-        let r1 = db
-            .create_round(&session.id, Some("Obj 1"), None)
-            .unwrap();
+        let r1 = db.create_round(&session.id, Some("Obj 1"), None).unwrap();
         assert_eq!(r1.round_number, 1);
 
         let r2 = db
@@ -1683,8 +1821,7 @@ mod tests {
         assert_eq!(responses[0].content, "Updated content");
 
         // Different agent is a separate row
-        db.save_response(&round.id, "agent-b", "B content")
-            .unwrap();
+        db.save_response(&round.id, "agent-b", "B content").unwrap();
         let responses = db.get_round_responses(&round.id).unwrap();
         assert_eq!(responses.len(), 2);
 
@@ -1867,10 +2004,7 @@ mod tests {
         assert_eq!(history["session"]["project"], "proj");
         assert_eq!(history["rounds"].as_array().unwrap().len(), 2);
         assert_eq!(
-            history["rounds"][0]["responses"]
-                .as_array()
-                .unwrap()
-                .len(),
+            history["rounds"][0]["responses"].as_array().unwrap().len(),
             2
         );
         assert_eq!(history["feedback_items"].as_array().unwrap().len(), 1);
@@ -1955,14 +2089,8 @@ mod tests {
     #[test]
     fn workflow_template_upsert() {
         let db = db();
-        db.upsert_workflow_template(
-            "brainstorm_3phase",
-            "Overview",
-            "{}",
-            "Rules",
-            "Format",
-        )
-        .unwrap();
+        db.upsert_workflow_template("brainstorm_3phase", "Overview", "{}", "Rules", "Format")
+            .unwrap();
 
         let wf = db
             .get_workflow_template("brainstorm_3phase")
@@ -1990,10 +2118,20 @@ mod tests {
     #[test]
     fn tool_guide_crud() {
         let db = db();
-        db.upsert_tool_guide("bs_new_session", "setup", "Start session", "Call with topic")
-            .unwrap();
-        db.upsert_tool_guide("bs_save_response", "analysis", "Save response", "Call with content")
-            .unwrap();
+        db.upsert_tool_guide(
+            "bs_new_session",
+            "setup",
+            "Start session",
+            "Call with topic",
+        )
+        .unwrap();
+        db.upsert_tool_guide(
+            "bs_save_response",
+            "analysis",
+            "Save response",
+            "Call with content",
+        )
+        .unwrap();
 
         let guide = db.get_tool_guide("bs_new_session").unwrap().unwrap();
         assert_eq!(guide.phase, "setup");
