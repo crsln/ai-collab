@@ -17,7 +17,7 @@ macro_rules! define_id {
             }
 
             /// Create from an existing string (e.g., loaded from DB).
-            pub fn from_str(s: impl Into<String>) -> Self {
+            pub fn from_existing(s: impl Into<String>) -> Self {
                 Self(s.into())
             }
 
@@ -97,13 +97,13 @@ mod tests {
 
     #[test]
     fn id_from_string() {
-        let id = SessionId::from_str("bs_test123");
+        let id = SessionId::from_existing("bs_test123");
         assert_eq!(id.as_str(), "bs_test123");
     }
 
     #[test]
     fn id_serializes_as_string() {
-        let id = SessionId::from_str("bs_abc123");
+        let id = SessionId::from_existing("bs_abc123");
         let json = serde_json::to_string(&id).unwrap();
         assert_eq!(json, "\"bs_abc123\"");
     }

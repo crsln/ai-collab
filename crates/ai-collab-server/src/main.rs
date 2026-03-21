@@ -76,8 +76,10 @@ async fn main() -> anyhow::Result<()> {
             let service = server.serve(rmcp::transport::stdio()).await?;
             service.waiting().await?;
         }
-        Command::SeedDefaults { db: _ } => {
-            eprintln!("TODO: Seed defaults not yet implemented");
+        Command::SeedDefaults { db: db_path } => {
+            let db = BrainstormDb::new(&db_path)?;
+            ai_collab_db::seeds::seed_defaults(&db)?;
+            eprintln!("Database seeded with defaults.");
         }
     }
 

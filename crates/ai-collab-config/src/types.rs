@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 /// Top-level TOML configuration (deserialized from ai-collab.toml).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct AppConfig {
     #[serde(default)]
     pub settings: Settings,
@@ -13,14 +14,6 @@ pub struct AppConfig {
     pub agents: BTreeMap<String, AgentToml>,
 }
 
-impl Default for AppConfig {
-    fn default() -> Self {
-        Self {
-            settings: Settings::default(),
-            agents: BTreeMap::new(),
-        }
-    }
-}
 
 /// Global settings section.
 #[derive(Debug, Clone, Serialize, Deserialize)]

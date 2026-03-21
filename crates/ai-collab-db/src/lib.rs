@@ -5,5 +5,6 @@
 
 pub mod queries;
 pub mod schema;
+pub mod seeds;
 
 pub use queries::BrainstormDb;

@@ -23,11 +23,10 @@ impl AgentRunConfig {
             .iter()
             .map(|a| a.replace("{prompt}", prompt))
             .collect();
-        if let Some(ref model) = self.model {
-            if !model.is_empty() {
+        if let Some(ref model) = self.model
+            && !model.is_empty() {
                 result.extend(["--model".to_string(), model.clone()]);
             }
-        }
         result
     }
 }

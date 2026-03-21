@@ -71,11 +71,10 @@ impl GenericCLIProvider {
                 }
                 args.push(arg.clone());
             }
-            if let Some(ref model) = self.config.model {
-                if !model.is_empty() {
+            if let Some(ref model) = self.config.model
+                && !model.is_empty() {
                     args.extend(["--model".to_string(), model.clone()]);
                 }
-            }
             Some(prompt.as_bytes().to_vec())
         } else {
             None
@@ -104,12 +103,11 @@ impl GenericCLIProvider {
         })?;
 
         // Write stdin if needed, then close it
-        if let Some(input) = stdin_input {
-            if let Some(mut stdin) = child.stdin.take() {
+        if let Some(input) = stdin_input
+            && let Some(mut stdin) = child.stdin.take() {
                 stdin.write_all(&input).await?;
                 drop(stdin); // Close stdin to signal EOF
             }
-        }
 
         // Wait with timeout
         let result = timeout(
