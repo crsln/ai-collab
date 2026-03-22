@@ -1,13 +1,6 @@
-__pycache__/
-*.pyc
-*.pyo
 .env
 .data/
 .brainstorm/
-*.egg-info/
-dist/
-build/
-.eggs/
 ai-collab.toml
 .gemini/
 
