@@ -5,6 +5,7 @@ ai-collab.toml
 .gemini/
 .claude/
 .mcp.json
+docs/superpowers/
 
 # Rust build artifacts
 /target/
