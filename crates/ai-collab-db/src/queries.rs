@@ -367,6 +367,20 @@ impl BrainstormDb {
         })
     }
 
+    pub fn update_response_quality(
+        &self,
+        response_id: &ResponseId,
+        quality: &ResponseQuality,
+    ) -> Result<(), DbError> {
+        self.conn
+            .execute(
+                "UPDATE responses SET quality = ?1 WHERE id = ?2",
+                params![quality.to_string(), response_id.as_str()],
+            )
+            .db()?;
+        Ok(())
+    }
+
     pub fn get_response(
         &self,
         round_id: &RoundId,
@@ -2222,5 +2236,26 @@ mod tests {
         // Only one role for this agent
         let roles = db.list_roles(&session.id).unwrap();
         assert_eq!(roles.len(), 1);
+    }
+
+    #[test]
+    fn update_response_quality_sets_field() {
+        let db = db();
+        let session = db.create_session("Test", None).unwrap();
+        let round = db.create_round(&session.id, Some("obj"), Some("q")).unwrap();
+        let response = db.save_response(&round.id, "test-agent", "some content").unwrap();
+
+        // Initially None
+        assert!(response.quality.is_none());
+
+        // Update to Valid
+        db.update_response_quality(&response.id, &ResponseQuality::Valid).unwrap();
+        let fetched = db.get_response(&round.id, "test-agent").unwrap().unwrap();
+        assert_eq!(fetched.quality, Some(ResponseQuality::Valid));
+
+        // Update to Suspect
+        db.update_response_quality(&response.id, &ResponseQuality::Suspect).unwrap();
+        let fetched = db.get_response(&round.id, "test-agent").unwrap().unwrap();
+        assert_eq!(fetched.quality, Some(ResponseQuality::Suspect));
     }
 }
