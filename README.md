@@ -16,7 +16,7 @@ All communication happens through a shared SQLite database. Each agent has its o
 
 ### Prerequisites
 
-- Python 3.10+
+- [Rust toolchain](https://rustup.rs/) (for building)
 - Claude Code CLI
 - At least one AI CLI tool installed:
   - [GitHub Copilot CLI](https://github.com/github/copilot-cli) (`copilot`)
@@ -27,7 +27,7 @@ All communication happens through a shared SQLite database. Each agent has its o
 ### Install
 
 ```bash
-pip install ai-collab
+cargo install --git https://github.com/crsln/ai-collab.git ai-collab-server
 ```
 
 Or for development:
@@ -35,56 +35,64 @@ Or for development:
 ```bash
 git clone https://github.com/crsln/ai-collab.git
 cd ai-collab
-pip install -e .
+cargo install --path crates/ai-collab-server
 ```
+
+This puts `ai-collab-server` in your cargo bin directory (already in PATH).
 
 ### Setup
 
-Run the interactive setup wizard:
+1. Copy the example config and enable your agents:
 
 ```bash
-ai-collab init
+cp ai-collab.toml.example ai-collab.toml
+# Edit ai-collab.toml — enable/disable agents as needed
 ```
 
-This will:
-1. Scan your PATH for installed AI CLIs
-2. Let you choose which agents to enable
-3. Generate `ai-collab.toml` with your agent configuration
-4. Output MCP config snippets for Claude Code and each agent
-5. Seed the database with workflow templates and tool guides
+2. Seed the database with default workflows, tool guides, and role templates:
+
+```bash
+ai-collab-server seed-defaults --db .data/brainstorm.db
+```
 
 ### Configure Claude Code
 
-Add to your Claude Code MCP settings (`.claude/settings.json` or global settings):
+Add to your project's `.mcp.json` (or global `~/.claude/settings.json`):
 
 ```json
 {
   "mcpServers": {
     "ai-collab": {
-      "command": "python",
-      "args": ["/path/to/ai-collab/mcp_server.py"]
+      "command": "ai-collab-server",
+      "args": ["serve", "--db", ".data/brainstorm.db"]
     }
   }
 }
 ```
 
-> **Windows:** Use the full path to your Python executable instead of `"python"`:
-> ```json
-> "command": "C:/Users/YOU/AppData/Local/Programs/Python/Python312/python.exe"
-> ```
-> Use forward slashes in all paths. The setup wizard (`ai-collab init`) generates the correct paths automatically.
-
 ### Configure Agent MCP Access
 
-Each AI agent needs its own MCP server instance for brainstorm tools. The setup wizard generates config snippets for each agent. Examples:
+Each AI agent needs the agent-facing MCP server for brainstorm tools.
+
+**Claude subagents** (`.claude/agent-mcp.json`):
+```json
+{
+  "mcpServers": {
+    "brainstorm": {
+      "command": "ai-collab-server",
+      "args": ["agent-serve", "--db", ".data/brainstorm.db"]
+    }
+  }
+}
+```
 
 **GitHub Copilot** (`~/.copilot/mcp-config.json`):
 ```json
 {
   "mcpServers": {
     "brainstorm": {
-      "command": "python",
-      "args": ["/path/to/ai-collab/brainstorm_server.py"]
+      "command": "ai-collab-server",
+      "args": ["agent-serve", "--db", ".data/brainstorm.db"]
     }
   }
 }
@@ -95,8 +103,8 @@ Each AI agent needs its own MCP server instance for brainstorm tools. The setup 
 {
   "mcpServers": {
     "brainstorm": {
-      "command": "python",
-      "args": ["/path/to/ai-collab/brainstorm_server.py"]
+      "command": "ai-collab-server",
+      "args": ["agent-serve", "--db", ".data/brainstorm.db"]
     }
   }
 }
@@ -105,78 +113,63 @@ Each AI agent needs its own MCP server instance for brainstorm tools. The setup 
 **OpenAI Codex** (`~/.codex/config.toml`):
 ```toml
 [mcp_servers.brainstorm]
-command = "python"
-args = ["/path/to/ai-collab/brainstorm_server.py"]
+command = "ai-collab-server"
+args = ["agent-serve", "--db", ".data/brainstorm.db"]
 ```
 
 ## Usage
 
 ### Quick Delegation
 
-Ask a single agent a question:
 ```
 Use ask_agent("copilot", "How do I rebase interactively?")
-```
-
-Ask a single agent in a specific project directory:
-```
 Use ask_agent("gemini", "Analyze the architecture", cwd="/path/to/project")
-```
-
-Ask all configured agents in parallel:
-```
-Use ask_agents("What's the best approach for caching in this codebase?", cwd="/path/to/project")
-```
-
-List available agents:
-```
+Use ask_agents("What's the best approach for caching?", cwd="/path/to/project")
 Use list_agents()
 ```
 
 ### Structured Brainstorming
 
-Use the `/multi-ai-brainstorm` skill for full 3-phase brainstorming sessions. See the skill documentation for the complete workflow.
+Use the `/multi-ai-brainstorm` skill for full 3-phase brainstorming sessions.
 
 ## Architecture
 
-> **Note:** ai-collab is an MCP server, not a CLI tool. The `providers/` directory contains
-> internal subprocess adapters — they dispatch prompts to agent CLIs on behalf of `mcp_server.py`.
+A single Rust binary (`ai-collab-server`) provides two MCP server modes:
+
+1. **`ai-collab-server serve`** — Orchestrator MCP server (Claude Code connects here)
+2. **`ai-collab-server agent-serve`** — Agent-facing MCP server (each agent connects here)
 
 ### Data Flow
 
 ```
 User asks Claude Code to brainstorm
   │
-  ├── Claude Code ←──MCP──→ mcp_server.py (orchestrator tools)
-  │     ├── ask_agent / ask_agents → subprocess dispatch via providers/
+  ├── Claude Code ←──MCP──→ ai-collab-server serve (orchestrator tools)
+  │     ├── ask_agent / ask_agents → subprocess dispatch via providers
   │     ├── bs_run_round → parallel agent dispatch with fail-fast gates
   │     └── bs_* tools → brainstorm.db read/write
   │
   ├── brainstorm.db (shared SQLite — single source of truth)
   │
-  └── Each agent (Copilot/Gemini/Codex) ←──MCP──→ brainstorm_server.py
+  └── Each agent (Copilot/Gemini/Codex) ←──MCP──→ ai-collab-server agent-serve
         ├── bs_get_onboarding → discover task, role, workflow, prior work
-        ├── bs_save_response → save analysis
+        ├── bs_save_response → save analysis (auto-validated)
         └── bs_batch_respond → vote on all feedback items at once
 ```
 
-### File Structure
+### Crate Structure
 
 ```
 ai-collab/
-  ├── mcp_server.py          — Claude Code's MCP server (orchestrator tools)
-  ├── brainstorm_server.py    — Agent-facing MCP server (brainstorm tools)
-  ├── brainstorm_tools.py     — Shared tool handlers (both servers import)
-  ├── brainstorm_service.py   — Orchestration logic: onboarding, phase detection, gates
-  ├── brainstorm_db.py        — SQLite persistence (WAL mode, CRUD/DDL)
-  ├── brainstorm_seeds.py     — Default data: agent defs, workflows, tool guides, roles
-  ├── config.py               — TOML config + agent registry (BUILTIN_AGENTS)
-  ├── dashboard.py/html       — Web dashboard for session visualization
-  └── providers/              — Internal subprocess adapters (NOT standalone tools)
-       ├── generic.py         — GenericCLIProvider (subprocess + error handling)
-       ├── copilot.py         — Copilot output parsing
-       ├── codex.py           — Codex provider (exec mode)
-       └── gemini.py          — Gemini output parsing
+  ├── crates/
+  │   ├── ai-collab-server    — Two MCP servers (orchestrator + agent-facing) + validator
+  │   ├── ai-collab-core      — Enums, models, validation heuristics, traits
+  │   ├── ai-collab-db        — SQLite persistence (WAL mode, CRUD/DDL)
+  │   ├── ai-collab-config    — TOML config loading + agent registry
+  │   └── ai-collab-provider  — Subprocess dispatch for agents
+  ├── Cargo.toml              — Workspace root
+  ├── ai-collab.toml.example  — Agent configuration template
+  └── dashboard.html          — Web dashboard for session visualization
 ```
 
 ## Configuration
@@ -195,64 +188,33 @@ enabled = true
 command = "copilot"
 args = ["-p", "{prompt}", "--allow-all"]
 display_name = "GitHub Copilot"
-description = "Code analysis, git operations, verification"
 
 [agents.gemini]
 enabled = true
 command = "gemini"
 args = ["-p", "{prompt}", "--yolo"]
 display_name = "Google Gemini"
-description = "Architecture, research, alternatives"
 ```
 
 See `ai-collab.toml.example` for more examples including Codex, Aider, and custom agents.
 
-### Environment Variables
+### Self-Describing Database
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `BRAINSTORM_DB` | `.data/brainstorm.db` | Path to SQLite database |
-| `AI_COLLAB_SAVE_RESPONSES` | `false` | Save agent responses to files |
-| `AI_COLLAB_RESPONSES_DIR` | `.brainstorm/` | Where to save responses |
-| `AI_COLLAB_CONFIG` | `ai-collab.toml` | Path to config file |
+The brainstorm database is self-describing. Agent definitions, workflow templates, tool guides, and role templates are stored in global tables. Agents call `bs_get_onboarding(agent_name)` to discover everything they need.
 
-## Self-Describing Database
-
-The brainstorm database is self-describing. Agent definitions, workflow templates, tool guides, and role templates are stored in global tables. Agents call `bs_get_onboarding(agent_name)` to discover everything they need — including their task for the current round.
-
-### Pure ID-Based Prompts
-
-Agent dispatch prompts contain only IDs (~150 chars): agent name, session/round IDs, and a bootstrap instruction. The question is stored in the `rounds` table and retrieved by agents via `bs_get_onboarding()` (in the `task` field). This eliminates prompt bloat and Windows stdin piping issues.
-
-Seed defaults:
-```bash
-python brainstorm_cli.py seed-defaults
-```
+Agent dispatch prompts are pure ID-based (~150 chars): agent name, session/round IDs, and a bootstrap instruction. The question is stored in the `rounds` table and retrieved via `bs_get_onboarding()`.
 
 ### Role Library
 
-Reusable role templates let you assign specialized behaviors to agents without rewriting instructions each session:
+Reusable role templates for assigning specialized behaviors to agents:
 
 ```
-# List available roles
 Use bs_list_roles()
-Use bs_list_roles(agent_name="copilot")  # includes copilot-specific + generic roles
-Use bs_list_roles(tag="security")         # filter by tag
-
-# Apply to a session
 Use bs_apply_role(session_id, "copilot", "security-reviewer")
-Use bs_apply_role(session_id, "gemini", "architecture-analyst")
-
-# Refine over time
-Use bs_update_role("security-reviewer", notes="Works best when combined with code-verifier on copilot")
-
-# Create custom roles
 Use bs_create_role(slug="api-reviewer", display_name="API Reviewer", ...)
 ```
 
 8 seed templates included: `code-reviewer`, `security-reviewer`, `architecture-analyst`, `performance-analyst`, `ux-design-critic`, `devil-advocate`, `copilot-code-verifier`, `gemini-research-analyst`.
-
-Templates track usage counts and can be agent-specific or generic (any agent).
 
 ## License
 
