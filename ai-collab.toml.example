@@ -45,6 +45,16 @@ description = "Code generation, file editing, implementing specs from plans"
 # display_name = "Aider"
 # description = "AI pair programming"
 
+# Claude Haiku validator — uses Haiku for response quality checking
+[agents.validator]
+enabled = true
+command = "claude"
+args = ["-p", "{prompt}", "--allowedTools", "mcp__brainstorm__bs_update_quality"]
+model = "claude-haiku-4-5-20251001"
+timeout = 30.0
+display_name = "Response Validator"
+description = "Classifies agent responses as valid/invalid/empty using Haiku"
+
 # Example: Custom CLI agent
 # [agents.my_agent]
 # enabled = false
