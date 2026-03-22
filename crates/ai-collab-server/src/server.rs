@@ -527,7 +527,15 @@ impl OrchestratorServer {
         let db = self.db.lock().unwrap();
         let rid = RoundId::from(params.round_id.as_str());
         match db.save_response(&rid, &params.agent_name, &params.content) {
-            Ok(response) => json_result(&response),
+            Ok(response) => {
+                // Auto-validate response quality
+                let quality = validate_heuristic(&params.content);
+                let _ = db.update_response_quality(&response.id, &quality);
+
+                let mut resp = response;
+                resp.quality = Some(quality);
+                json_result(&resp)
+            }
             Err(e) => json_result(&serde_json::json!({"error": e.to_string()})),
         }
     }
