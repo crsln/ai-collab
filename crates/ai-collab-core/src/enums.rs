@@ -113,6 +113,7 @@ pub enum ResponseQuality {
     SelfSaved,
     Empty,
     Invalid,
+    Suspect,
 }
 
 impl fmt::Display for ResponseQuality {
@@ -122,6 +123,7 @@ impl fmt::Display for ResponseQuality {
             Self::SelfSaved => write!(f, "self_saved"),
             Self::Empty => write!(f, "empty"),
             Self::Invalid => write!(f, "invalid"),
+            Self::Suspect => write!(f, "suspect"),
         }
     }
 }
@@ -134,6 +136,7 @@ impl FromStr for ResponseQuality {
             "self_saved" => Ok(Self::SelfSaved),
             "empty" => Ok(Self::Empty),
             "invalid" => Ok(Self::Invalid),
+            "suspect" => Ok(Self::Suspect),
             other => Err(format!("invalid response quality: {other}")),
         }
     }
@@ -163,5 +166,18 @@ mod tests {
     #[test]
     fn invalid_status_returns_error() {
         assert!("bogus".parse::<SessionStatus>().is_err());
+    }
+
+    #[test]
+    fn suspect_quality_roundtrip() {
+        let q = ResponseQuality::Suspect;
+        let s = q.to_string();
+        assert_eq!(s, "suspect");
+        assert_eq!(s.parse::<ResponseQuality>().unwrap(), ResponseQuality::Suspect);
+
+        let json = serde_json::to_string(&q).unwrap();
+        assert_eq!(json, "\"suspect\"");
+        let parsed: ResponseQuality = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, ResponseQuality::Suspect);
     }
 }
