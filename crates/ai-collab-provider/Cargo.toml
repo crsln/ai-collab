@@ -1,0 +1,11 @@
+[package]
+name = "ai-collab-provider"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ai-collab-core = { workspace = true }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+regex = "1"
+which = "7"

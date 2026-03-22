@@ -1,0 +1,61 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/ai-collab-core",
+    "crates/ai-collab-config",
+    "crates/ai-collab-db",
+    "crates/ai-collab-provider",
+    "crates/ai-collab-server",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/AhmetCemworktree/ai-collab"
+
+[workspace.dependencies]
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Date/time
+chrono = { version = "0.4", features = ["serde"] }
+
+# IDs
+uuid = { version = "1", features = ["v4"] }
+
+# Errors
+thiserror = "2"
+anyhow = "1"
+
+# Async
+tokio = { version = "1", features = ["full"] }
+
+# Database
+rusqlite = { version = "0.33", features = ["bundled"] }
+
+# Config
+toml = "0.8"
+dirs = "6"
+clap = { version = "4", features = ["derive"] }
+
+# MCP
+rmcp = { version = "1.2", features = ["server", "transport-io", "macros"] }
+schemars = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Internal crates
+ai-collab-core = { path = "crates/ai-collab-core" }
+ai-collab-config = { path = "crates/ai-collab-config" }
+ai-collab-db = { path = "crates/ai-collab-db" }
+ai-collab-provider = { path = "crates/ai-collab-provider" }
+
+[profile.release]
+strip = true
+lto = "thin"
+codegen-units = 1
+panic = "abort"

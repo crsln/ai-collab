@@ -10,3 +10,6 @@ build/
 .eggs/
 ai-collab.toml
 .gemini/
+
+# Rust build artifacts
+/target/
