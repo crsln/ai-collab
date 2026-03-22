@@ -3,6 +3,7 @@
 //! Provides only the tools agents need during brainstorm sessions:
 //! onboarding, responses, feedback, roles, and read-only session data.
 
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use rmcp::handler::server::router::tool::ToolRouter;
@@ -12,6 +13,7 @@ use rmcp::{ServerHandler, tool, tool_handler, tool_router};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
+use ai_collab_config::AgentConfig;
 use ai_collab_core::*;
 use ai_collab_db::BrainstormDb;
 
@@ -135,6 +137,7 @@ pub struct UpdateQualityParams {
 #[derive(Clone)]
 pub struct AgentServer {
     db: Arc<Mutex<BrainstormDb>>,
+    config: BTreeMap<String, AgentConfig>,
     tool_router: ToolRouter<Self>,
 }
 
@@ -256,7 +259,20 @@ impl AgentServer {
                 let _ = db.update_response_quality(&response.id, &quality);
 
                 let mut resp = response;
-                resp.quality = Some(quality);
+                resp.quality = Some(quality.clone());
+
+                // Spawn background Haiku validator for suspect responses
+                if quality == ResponseQuality::Suspect {
+                    drop(db); // Release mutex before spawning background task
+                    crate::validator::spawn_validator(
+                        Arc::clone(&self.db),
+                        &self.config,
+                        resp.id.clone(),
+                        params.agent_name.clone(),
+                        params.content.clone(),
+                    );
+                }
+
                 json_result(&resp)
             }
             Err(e) => json_result(&serde_json::json!({"error": e.to_string()})),
@@ -424,9 +440,10 @@ impl ServerHandler for AgentServer {
 }
 
 impl AgentServer {
-    pub fn new(db: BrainstormDb) -> Self {
+    pub fn new(db: BrainstormDb, config: BTreeMap<String, AgentConfig>) -> Self {
         Self {
             db: Arc::new(Mutex::new(db)),
+            config,
             tool_router: Self::tool_router(),
         }
     }

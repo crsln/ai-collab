@@ -533,7 +533,20 @@ impl OrchestratorServer {
                 let _ = db.update_response_quality(&response.id, &quality);
 
                 let mut resp = response;
-                resp.quality = Some(quality);
+                resp.quality = Some(quality.clone());
+
+                // Spawn background Haiku validator for suspect responses
+                if quality == ResponseQuality::Suspect {
+                    drop(db); // Release mutex before spawning background task
+                    crate::validator::spawn_validator(
+                        Arc::clone(&self.db),
+                        &self.config,
+                        resp.id.clone(),
+                        params.agent_name.clone(),
+                        params.content.clone(),
+                    );
+                }
+
                 json_result(&resp)
             }
             Err(e) => json_result(&serde_json::json!({"error": e.to_string()})),

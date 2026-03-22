@@ -2,6 +2,7 @@
 
 mod agent_server;
 mod server;
+mod validator;
 
 use std::path::PathBuf;
 
@@ -72,7 +73,14 @@ async fn main() -> anyhow::Result<()> {
         Command::AgentServe { db: db_path } => {
             tracing::info!("Starting agent-facing MCP server");
             let db = BrainstormDb::new(&db_path)?;
-            let server = AgentServer::new(db);
+            let (_, agents) = load_config().unwrap_or_else(|e| {
+                tracing::warn!("Failed to load config, using empty: {e}");
+                (
+                    ai_collab_config::AppConfig::default(),
+                    std::collections::BTreeMap::new(),
+                )
+            });
+            let server = AgentServer::new(db, agents);
             let service = server.serve(rmcp::transport::stdio()).await?;
             service.waiting().await?;
         }
