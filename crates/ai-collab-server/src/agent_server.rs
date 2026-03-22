@@ -120,6 +120,14 @@ pub struct GetResponseParams {
     pub agent_name: String,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct UpdateQualityParams {
+    #[schemars(description = "Response ID to update")]
+    pub response_id: String,
+    #[schemars(description = "Quality classification: valid, invalid, or empty")]
+    pub quality: String,
+}
+
 // ---------------------------------------------------------------------------
 // AgentServer
 // ---------------------------------------------------------------------------
@@ -242,7 +250,15 @@ impl AgentServer {
         let db = self.db.lock().unwrap();
         let rid = RoundId::from(params.round_id.as_str());
         match db.save_response(&rid, &params.agent_name, &params.content) {
-            Ok(response) => json_result(&response),
+            Ok(response) => {
+                // Auto-validate response quality
+                let quality = validate_heuristic(&params.content);
+                let _ = db.update_response_quality(&response.id, &quality);
+
+                let mut resp = response;
+                resp.quality = Some(quality);
+                json_result(&resp)
+            }
             Err(e) => json_result(&serde_json::json!({"error": e.to_string()})),
         }
     }
@@ -265,6 +281,24 @@ impl AgentServer {
             Ok(Some(response)) => json_result(&response),
             Ok(None) => json_result(&serde_json::json!({
                 "error": format!("No response found for agent '{}' in round '{}'", params.agent_name, params.round_id)
+            })),
+            Err(e) => json_result(&serde_json::json!({"error": e.to_string()})),
+        }
+    }
+
+    #[tool(description = "Update quality classification for a response (used by validator agent)")]
+    fn bs_update_quality(&self, Parameters(params): Parameters<UpdateQualityParams>) -> String {
+        let quality = match params.quality.parse::<ResponseQuality>() {
+            Ok(q) => q,
+            Err(e) => return json_result(&serde_json::json!({"error": e})),
+        };
+        let db = self.db.lock().unwrap();
+        let rid = ResponseId::from(params.response_id.as_str());
+        match db.update_response_quality(&rid, &quality) {
+            Ok(()) => json_result(&serde_json::json!({
+                "updated": true,
+                "response_id": params.response_id,
+                "quality": params.quality,
             })),
             Err(e) => json_result(&serde_json::json!({"error": e.to_string()})),
         }
