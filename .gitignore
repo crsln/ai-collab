@@ -3,6 +3,8 @@
 .brainstorm/
 ai-collab.toml
 .gemini/
+.claude/
+.mcp.json
 
 # Rust build artifacts
 /target/
