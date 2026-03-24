@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     topic TEXT NOT NULL,
     project TEXT,
     context TEXT,
-    status TEXT DEFAULT 'active',
+    status TEXT DEFAULT 'active' CHECK(status IN ('active','completed','archived')),
     created_at TEXT NOT NULL
 );
 
@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS responses (
     round_id TEXT NOT NULL,
     agent_name TEXT NOT NULL,
     content TEXT NOT NULL,
-    quality TEXT,
+    quality TEXT CHECK(quality IS NULL OR quality IN ('valid','invalid','suspect','empty','self_saved')),
     source TEXT DEFAULT 'stdout',
     created_at TEXT NOT NULL,
     FOREIGN KEY (round_id) REFERENCES rounds(id) ON DELETE CASCADE,
@@ -54,7 +54,7 @@ CREATE TABLE IF NOT EXISTS feedback_items (
     source_agent TEXT NOT NULL,
     title TEXT NOT NULL,
     content TEXT NOT NULL,
-    status TEXT DEFAULT 'pending',
+    status TEXT DEFAULT 'pending' CHECK(status IN ('pending','accepted','rejected','modified','consolidated')),
     created_at TEXT NOT NULL,
     FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
     FOREIGN KEY (source_round_id) REFERENCES rounds(id) ON DELETE CASCADE
@@ -65,7 +65,7 @@ CREATE TABLE IF NOT EXISTS feedback_responses (
     item_id TEXT NOT NULL,
     round_id TEXT NOT NULL,
     agent_name TEXT NOT NULL,
-    verdict TEXT NOT NULL,
+    verdict TEXT NOT NULL CHECK(verdict IN ('accept','reject','modify','abstain','agree','disagree','partial')),
     reasoning TEXT NOT NULL,
     created_at TEXT NOT NULL,
     FOREIGN KEY (item_id) REFERENCES feedback_items(id) ON DELETE CASCADE,
@@ -155,8 +155,8 @@ CREATE TABLE IF NOT EXISTS round_participants (
     id TEXT PRIMARY KEY,
     round_id TEXT NOT NULL,
     agent_name TEXT NOT NULL,
-    phase TEXT NOT NULL DEFAULT 'analysis',
-    status TEXT NOT NULL DEFAULT 'pending',
+    phase TEXT NOT NULL DEFAULT 'analysis' CHECK(phase IN ('analysis','deliberation','consolidation')),
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','dispatched','responded','failed')),
     dispatched_at TEXT,
     responded_at TEXT,
     response_quality TEXT,

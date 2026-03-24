@@ -231,6 +231,14 @@ pub struct RespondToFeedbackParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct AutoResolveParams {
+    #[schemars(description = "Session ID")]
+    pub session_id: String,
+    #[schemars(description = "Round ID (to determine which agents voted)")]
+    pub round_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct CheckFeedbackStatusParams {
     #[schemars(description = "Round ID")]
     pub round_id: String,
@@ -917,6 +925,89 @@ impl OrchestratorServer {
             })),
             Err(e) => json_result(&serde_json::json!({"error": e.to_string()})),
         }
+    }
+
+    #[tool(
+        description = "Auto-resolve feedback items based on agent verdicts. Unanimous accept→accepted, unanimous reject→rejected, majority wins. Only processes pending items."
+    )]
+    fn bs_auto_resolve(
+        &self,
+        Parameters(params): Parameters<AutoResolveParams>,
+    ) -> String {
+        let db = self.db.lock().unwrap();
+        let sid = SessionId::from(params.session_id.as_str());
+        let rid = RoundId::from(params.round_id.as_str());
+
+        // Get all pending feedback items
+        let items = match db.list_feedback_items(&sid, Some(&FeedbackStatus::Pending)) {
+            Ok(items) => items,
+            Err(e) => return json_result(&serde_json::json!({"error": e.to_string()})),
+        };
+
+        let mut resolved = 0u32;
+        let mut contested = 0u32;
+        let mut details = Vec::new();
+
+        for item in &items {
+            // Get verdicts for this item
+            let fid = &item.id;
+            let responses = match db.get_feedback_responses(fid) {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+
+            if responses.is_empty() {
+                contested += 1;
+                details.push(serde_json::json!({
+                    "item_id": fid.as_str(),
+                    "title": item.title,
+                    "result": "no_votes",
+                }));
+                continue;
+            }
+
+            let total = responses.len();
+            let accepts = responses.iter().filter(|r| r.verdict == "accept" || r.verdict == "agree").count();
+            let rejects = responses.iter().filter(|r| r.verdict == "reject" || r.verdict == "disagree").count();
+
+            let resolution = if accepts == total {
+                Some(FeedbackStatus::Accepted)
+            } else if rejects == total {
+                Some(FeedbackStatus::Rejected)
+            } else if accepts > total / 2 {
+                Some(FeedbackStatus::Accepted)
+            } else if rejects > total / 2 {
+                Some(FeedbackStatus::Rejected)
+            } else {
+                None // equal split — contested
+            };
+
+            if let Some(status) = resolution {
+                let _ = db.update_feedback_status(fid, &status);
+                resolved += 1;
+                details.push(serde_json::json!({
+                    "item_id": fid.as_str(),
+                    "title": item.title,
+                    "result": status.to_string(),
+                    "votes": {"accept": accepts, "reject": rejects, "total": total},
+                }));
+            } else {
+                contested += 1;
+                details.push(serde_json::json!({
+                    "item_id": fid.as_str(),
+                    "title": item.title,
+                    "result": "contested",
+                    "votes": {"accept": accepts, "reject": rejects, "total": total},
+                }));
+            }
+        }
+
+        json_result(&serde_json::json!({
+            "resolved": resolved,
+            "contested": contested,
+            "total_pending": items.len(),
+            "details": details,
+        }))
     }
 
     #[tool(description = "Update the status of a feedback item")]

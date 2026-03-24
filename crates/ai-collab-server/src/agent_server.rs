@@ -93,6 +93,26 @@ pub struct RespondToFeedbackParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct BatchRespondParams {
+    #[schemars(description = "Round ID for this feedback phase")]
+    pub round_id: String,
+    #[schemars(description = "Agent name providing the verdicts")]
+    pub agent_name: String,
+    #[schemars(description = "Array of verdicts, one per feedback item")]
+    pub verdicts: Vec<VerdictItem>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct VerdictItem {
+    #[schemars(description = "Feedback item ID")]
+    pub item_id: String,
+    #[schemars(description = "Verdict: accept, reject, modify, abstain")]
+    pub verdict: String,
+    #[schemars(description = "Reasoning behind the verdict")]
+    pub reasoning: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct ListFeedbackParams {
     #[schemars(description = "Session ID")]
     pub session_id: String,
@@ -364,6 +384,37 @@ impl AgentServer {
             Ok(response) => json_result(&response),
             Err(e) => json_result(&serde_json::json!({"error": e.to_string()})),
         }
+    }
+
+    #[tool(
+        description = "Submit verdicts on ALL feedback items in one call. Preferred over calling bs_respond_to_feedback per item."
+    )]
+    fn bs_batch_respond(
+        &self,
+        Parameters(params): Parameters<BatchRespondParams>,
+    ) -> String {
+        let db = self.db.lock().unwrap();
+        let rid = RoundId::from(params.round_id.as_str());
+        let mut saved = 0u32;
+        let mut errors = Vec::new();
+
+        for v in &params.verdicts {
+            let fid = FeedbackId::from(v.item_id.as_str());
+            match db.save_feedback_response(&fid, &rid, &params.agent_name, &v.verdict, &v.reasoning)
+            {
+                Ok(_) => saved += 1,
+                Err(e) => errors.push(serde_json::json!({
+                    "item_id": v.item_id,
+                    "error": e.to_string(),
+                })),
+            }
+        }
+
+        json_result(&serde_json::json!({
+            "saved": saved,
+            "errors": errors,
+            "total": params.verdicts.len(),
+        }))
     }
 
     #[tool(description = "List feedback items for a session, optionally filtered by status")]

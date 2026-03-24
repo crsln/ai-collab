@@ -121,7 +121,7 @@ Quality expectations:
 - 'modify' means you agree with the spirit but want changes — explain what changes"#;
 
     db.upsert_workflow_template(
-        "brainstorm_3phase",
+        "multi-ai-brainstorm",
         r#"You are participating in a structured multi-AI brainstorm. Multiple agents collaborate through a shared SQLite database. Each agent has its own MCP server instance for reading/writing brainstorm records. The process has 3 phases: independent analysis, deliberation with verdicts, and final consolidation. Work independently — read DB records, analyze code, and save your findings via MCP tools."#,
         phases_json,
         convergence_rules,
@@ -252,7 +252,7 @@ fn seed_tool_guides(db: &BrainstormDb) -> Result<(), DbError> {
         "bs_get_workflow",
         "any",
         "Read the workflow template (phases, convergence rules, response format). Included in onboarding but available separately.",
-        "bs_get_workflow(). Optional: name='brainstorm_3phase' (default).",
+        "bs_get_workflow(). Returns the 'multi-ai-brainstorm' workflow template.",
     )?;
 
     db.upsert_tool_guide(
