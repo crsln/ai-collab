@@ -228,9 +228,16 @@ fn seed_tool_guides(db: &BrainstormDb) -> Result<(), DbError> {
     )?;
 
     db.upsert_tool_guide(
+        "bs_auto_resolve",
+        "phase2",
+        "Auto-resolve pending feedback items based on agent verdicts. Unanimous/majority wins. Only processes pending items.",
+        "bs_auto_resolve(session_id='bs_xxx', round_id='r_xxx'). Returns resolved count, contested count, and per-item details.",
+    )?;
+
+    db.upsert_tool_guide(
         "bs_update_feedback_status",
         "phase2",
-        "Update a feedback item's status after convergence. Claude uses this to mark items as accepted/rejected.",
+        "Manually update a feedback item's status. Use bs_auto_resolve for automatic resolution.",
         "bs_update_feedback_status(item_id='fb_xxx', status='accepted|rejected|modified|consolidated')",
     )?;
 

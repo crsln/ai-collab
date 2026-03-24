@@ -949,12 +949,17 @@ impl OrchestratorServer {
         let mut details = Vec::new();
 
         for item in &items {
-            // Get verdicts for this item
+            // Get verdicts for this item, filtered by round
             let fid = &item.id;
-            let responses = match db.get_feedback_responses(fid) {
+            let all_responses = match db.get_feedback_responses(fid) {
                 Ok(r) => r,
                 Err(_) => continue,
             };
+            // Filter to only the specified round's votes
+            let responses: Vec<_> = all_responses
+                .into_iter()
+                .filter(|r| r.round_id == rid)
+                .collect();
 
             if responses.is_empty() {
                 contested += 1;

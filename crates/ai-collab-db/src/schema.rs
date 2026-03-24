@@ -156,7 +156,7 @@ CREATE TABLE IF NOT EXISTS round_participants (
     round_id TEXT NOT NULL,
     agent_name TEXT NOT NULL,
     phase TEXT NOT NULL DEFAULT 'analysis' CHECK(phase IN ('analysis','deliberation','consolidation')),
-    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','dispatched','responded','failed')),
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','dispatched','responded','failed','validated','timed_out')),
     dispatched_at TEXT,
     responded_at TEXT,
     response_quality TEXT,

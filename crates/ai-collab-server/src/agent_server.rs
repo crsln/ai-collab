@@ -86,7 +86,7 @@ pub struct RespondToFeedbackParams {
     pub round_id: String,
     #[schemars(description = "Agent name providing the verdict")]
     pub agent_name: String,
-    #[schemars(description = "Verdict: agree, disagree, partial, abstain")]
+    #[schemars(description = "Verdict: accept, reject, modify, abstain")]
     pub verdict: String,
     #[schemars(description = "Reasoning behind the verdict")]
     pub reasoning: String,
