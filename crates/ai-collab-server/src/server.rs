@@ -29,6 +29,31 @@ fn json_result<T: serde::Serialize>(val: &T) -> String {
 // Parameter structs
 // ---------------------------------------------------------------------------
 
+/// Empty params for tools that take no arguments.
+/// Using `()` produces `"type": "null"` which violates the MCP spec
+/// (inputSchema.type must be "object").
+/// Custom JsonSchema impl ensures `"properties": {}` is always present
+/// (OpenAI/Copilot rejects schemas without it).
+#[derive(Debug, Deserialize)]
+pub struct EmptyParams {}
+
+impl schemars::JsonSchema for EmptyParams {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "EmptyParams".into()
+    }
+    fn schema_id() -> std::borrow::Cow<'static, str> {
+        concat!(module_path!(), "::EmptyParams").into()
+    }
+    fn json_schema(_gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "object",
+            "properties": {},
+            "title": "EmptyParams",
+            "description": "Empty params for tools that take no arguments."
+        })
+    }
+}
+
 // -- Delegation --
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -99,6 +124,35 @@ pub struct NewRoundParams {
 pub struct RoundIdParams {
     #[schemars(description = "Round ID")]
     pub round_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct RunRoundParams {
+    #[schemars(description = "Session ID")]
+    pub session_id: String,
+    #[schemars(description = "Objective for this round")]
+    pub objective: String,
+    #[schemars(description = "Question for agents to answer")]
+    pub question: String,
+    #[schemars(description = "Working directory for agent subprocesses (optional)")]
+    #[serde(default)]
+    pub cwd: Option<String>,
+    #[schemars(
+        description = "Comma-separated agent names to dispatch (optional, defaults to all enabled non-validator agents)"
+    )]
+    #[serde(default)]
+    pub agents: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct RetryAgentParams {
+    #[schemars(description = "Round ID")]
+    pub round_id: String,
+    #[schemars(description = "Agent name to retry")]
+    pub agent_name: String,
+    #[schemars(description = "Working directory for the agent subprocess (optional)")]
+    #[serde(default)]
+    pub cwd: Option<String>,
 }
 
 // -- Responses --
@@ -336,7 +390,7 @@ impl OrchestratorServer {
     #[tool(description = "List all enabled agents from configuration")]
     fn list_agents(
         &self,
-        #[allow(unused_variables)] Parameters(_params): Parameters<()>,
+        #[allow(unused_variables)] Parameters(_params): Parameters<EmptyParams>,
     ) -> String {
         let enabled = ai_collab_config::get_enabled_agents(&self.config);
         let agents: Vec<serde_json::Value> = enabled
@@ -516,6 +570,244 @@ impl OrchestratorServer {
             }
             Err(e) => json_result(&serde_json::json!({"error": e.to_string()})),
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Round dispatch tools
+    // -----------------------------------------------------------------------
+
+    #[tool(
+        description = "Run a full round: create round, dispatch ALL agents in parallel, wait for completion, return results. FAIL-FAST: if any agent fails, returns [ROUND FAILED]."
+    )]
+    async fn bs_run_round(
+        &self,
+        Parameters(params): Parameters<RunRoundParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let sid = SessionId::from(params.session_id.as_str());
+        let db = Arc::clone(&self.db);
+        let config = self.config.clone();
+
+        // 1. Determine which agents to dispatch
+        let agent_names: Vec<String> = if let Some(ref agents_str) = params.agents {
+            agents_str
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect()
+        } else {
+            // All enabled agents except "validator"
+            ai_collab_config::get_enabled_agents(&config)
+                .keys()
+                .filter(|name| *name != "validator")
+                .cloned()
+                .collect()
+        };
+
+        if agent_names.is_empty() {
+            return Err(McpError::invalid_params(
+                "No agents to dispatch. Check config or agents parameter.",
+                None,
+            ));
+        }
+
+        // 2. Validate all agents exist in config
+        for name in &agent_names {
+            if !config.contains_key(name) {
+                return Err(McpError::invalid_params(
+                    format!("Agent '{}' not found in config", name),
+                    None,
+                ));
+            }
+        }
+
+        // 3. Create round + register participants (single lock acquisition)
+        let round = {
+            let db_lock = db.lock().unwrap();
+            let round = db_lock
+                .create_round(&sid, Some(&params.objective), Some(&params.question))
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+            for name in &agent_names {
+                db_lock
+                    .register_participant(&round.id, name, "analysis")
+                    .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+            }
+            round
+        };
+
+        // 4. Spawn all agent dispatches in parallel
+        let mut handles = Vec::new();
+        for agent_name in &agent_names {
+            let db_clone = Arc::clone(&db);
+            let config_clone = config.clone();
+            let rid = round.id.clone();
+            let sid_clone = sid.clone();
+            let name = agent_name.clone();
+            let cwd = params.cwd.clone();
+
+            handles.push(tokio::spawn(async move {
+                dispatch_single_agent(db_clone, config_clone, rid, sid_clone, name, cwd).await
+            }));
+        }
+
+        // 5. Await all results
+        let mut results: Vec<AgentDispatchResult> = Vec::new();
+        for handle in handles {
+            match handle.await {
+                Ok(result) => results.push(result),
+                Err(e) => {
+                    results.push(AgentDispatchResult {
+                        agent_name: "unknown".into(),
+                        success: false,
+                        quality: None,
+                        error: Some(format!("Task panic: {e}")),
+                        duration_secs: 0.0,
+                    });
+                }
+            }
+        }
+
+        // 6. Compute gate status
+        let total = results.len();
+        let succeeded = results.iter().filter(|r| r.success).count();
+        let failed = total - succeeded;
+        let all_done = succeeded == total;
+
+        // 7. Build response
+        if all_done {
+            let body = serde_json::to_string_pretty(&serde_json::json!({
+                "status": "complete",
+                "round_id": round.id.as_str(),
+                "round_number": round.round_number,
+                "session_id": params.session_id,
+                "total_agents": total,
+                "succeeded": succeeded,
+                "gate_passed": true,
+                "results": results,
+            }))
+            .unwrap_or_default();
+            Ok(CallToolResult::success(vec![Content::text(body)]))
+        } else {
+            let failed_agents: Vec<&AgentDispatchResult> =
+                results.iter().filter(|r| !r.success).collect();
+            let body = serde_json::to_string_pretty(&serde_json::json!({
+                "status": "[ROUND FAILED]",
+                "round_id": round.id.as_str(),
+                "round_number": round.round_number,
+                "session_id": params.session_id,
+                "total_agents": total,
+                "succeeded": succeeded,
+                "failed": failed,
+                "gate_passed": false,
+                "results": results,
+                "failed_agents": failed_agents,
+                "hint": "Use bs_retry_agent to retry failed agents, then bs_check_round_status to verify."
+            }))
+            .unwrap_or_default();
+            Ok(CallToolResult::success(vec![Content::text(body)]))
+        }
+    }
+
+    #[tool(
+        description = "Retry a failed or timed-out agent in a round. Increments retry count, re-dispatches the agent, returns updated status."
+    )]
+    async fn bs_retry_agent(
+        &self,
+        Parameters(params): Parameters<RetryAgentParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let rid = RoundId::from(params.round_id.as_str());
+        let db = Arc::clone(&self.db);
+        let config = self.config.clone();
+
+        // 1. Fetch participant + round
+        let (participant, round) = {
+            let db_lock = db.lock().unwrap();
+            let participant = db_lock
+                .get_participant(&rid, &params.agent_name)
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?
+                .ok_or_else(|| {
+                    McpError::invalid_params(
+                        format!(
+                            "No participant record for agent '{}' in round '{}'",
+                            params.agent_name, params.round_id
+                        ),
+                        None,
+                    )
+                })?;
+
+            let round = db_lock
+                .get_round(&rid)
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?
+                .ok_or_else(|| {
+                    McpError::invalid_params(
+                        format!("Round '{}' not found", params.round_id),
+                        None,
+                    )
+                })?;
+
+            (participant, round)
+        };
+
+        // 2. Check status is retryable
+        if participant.status != ParticipantStatus::Failed
+            && participant.status != ParticipantStatus::TimedOut
+        {
+            return Err(McpError::invalid_params(
+                format!(
+                    "Agent '{}' status is '{}' — only failed or timed_out agents can be retried",
+                    params.agent_name, participant.status
+                ),
+                None,
+            ));
+        }
+
+        // 3. Check retry limit
+        if participant.retry_count >= participant.max_retries {
+            return Err(McpError::invalid_params(
+                format!(
+                    "Agent '{}' has exhausted retries ({}/{})",
+                    params.agent_name, participant.retry_count, participant.max_retries
+                ),
+                None,
+            ));
+        }
+
+        // 4. Increment retry count and reset status
+        {
+            let db_lock = db.lock().unwrap();
+            db_lock
+                .increment_retry_count(&rid, &params.agent_name)
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        }
+
+        // 5. Re-dispatch the agent
+        let result = dispatch_single_agent(
+            db,
+            config,
+            rid,
+            round.session_id,
+            params.agent_name.clone(),
+            params.cwd,
+        )
+        .await;
+
+        // 6. Return result
+        let body = serde_json::to_string_pretty(&serde_json::json!({
+            "agent": result.agent_name,
+            "success": result.success,
+            "quality": result.quality,
+            "error": result.error,
+            "duration_secs": result.duration_secs,
+            "retry_count": participant.retry_count + 1,
+            "hint": if result.success {
+                "Agent succeeded. Use bs_check_round_status to verify all agents are done."
+            } else {
+                "Agent still failing. Check error details, fix config, or try again."
+            },
+        }))
+        .unwrap_or_default();
+
+        Ok(CallToolResult::success(vec![Content::text(body)]))
     }
 
     // -----------------------------------------------------------------------
@@ -965,7 +1257,7 @@ impl OrchestratorServer {
     #[tool(description = "Get the workflow template defining the 3-phase brainstorm process")]
     fn bs_get_workflow(
         &self,
-        #[allow(unused_variables)] Parameters(_params): Parameters<()>,
+        #[allow(unused_variables)] Parameters(_params): Parameters<EmptyParams>,
     ) -> String {
         let db = self.db.lock().unwrap();
         match db.get_workflow_template("multi-ai-brainstorm") {
@@ -1033,6 +1325,204 @@ impl OrchestratorServer {
             db: Arc::new(Mutex::new(db)),
             config,
             tool_router: Self::tool_router(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Agent dispatch helpers (used by bs_run_round and bs_retry_agent)
+// ---------------------------------------------------------------------------
+
+/// Result of dispatching a single agent subprocess.
+#[derive(Debug, Clone, serde::Serialize)]
+struct AgentDispatchResult {
+    agent_name: String,
+    success: bool,
+    quality: Option<String>,
+    error: Option<String>,
+    duration_secs: f64,
+}
+
+/// Dispatch a single agent: Pending → Dispatched → (execute) → Responded/Failed.
+///
+/// Standalone async fn (not a method) so it can be moved into `tokio::spawn`.
+async fn dispatch_single_agent(
+    db: Arc<Mutex<BrainstormDb>>,
+    config: BTreeMap<String, AgentConfig>,
+    round_id: RoundId,
+    session_id: SessionId,
+    agent_name: String,
+    cwd: Option<String>,
+) -> AgentDispatchResult {
+    let start = std::time::Instant::now();
+
+    // 1. Look up agent config
+    let cfg = match config.get(&agent_name) {
+        Some(c) => c.clone(),
+        None => {
+            return AgentDispatchResult {
+                agent_name,
+                success: false,
+                quality: None,
+                error: Some("Agent not found in config".into()),
+                duration_secs: 0.0,
+            };
+        }
+    };
+
+    // 2. Mark as Dispatched
+    {
+        let db_lock = db.lock().unwrap();
+        let _ = db_lock.update_participant_status(
+            &round_id,
+            &agent_name,
+            &ParticipantStatus::Dispatched,
+            None,
+            None,
+        );
+    }
+
+    // 3. Build minimal bootstrap prompt (~150 chars)
+    let prompt = format!(
+        "You are '{}'. Call bs_get_onboarding(agent_name=\"{}\", session_id=\"{}\", round_id=\"{}\") to get your task.",
+        agent_name,
+        agent_name,
+        session_id.as_str(),
+        round_id.as_str(),
+    );
+
+    // 4. Build provider and execute
+    let run_config = AgentRunConfig {
+        name: cfg.name.clone(),
+        command: cfg.command.clone(),
+        args: cfg.args.clone(),
+        model: if cfg.model.is_empty() {
+            None
+        } else {
+            Some(cfg.model.clone())
+        },
+        timeout: cfg.timeout,
+    };
+
+    let provider = get_provider(run_config);
+    let result = provider.execute(&prompt, cwd.as_deref()).await;
+    let elapsed = start.elapsed().as_secs_f64();
+
+    match result {
+        Ok(output) => {
+            // 5a. Check if agent already self-saved via its own MCP server
+            let already_saved = {
+                let db_lock = db.lock().unwrap();
+                db_lock
+                    .get_response(&round_id, &agent_name)
+                    .ok()
+                    .flatten()
+                    .is_some()
+            };
+
+            if already_saved {
+                // Agent saved via bs_save_response on the agent-facing server.
+                let db_lock = db.lock().unwrap();
+                let _ = db_lock.update_participant_status(
+                    &round_id,
+                    &agent_name,
+                    &ParticipantStatus::Responded,
+                    Some(&ResponseQuality::SelfSaved),
+                    None,
+                );
+                return AgentDispatchResult {
+                    agent_name,
+                    success: true,
+                    quality: Some("self_saved".into()),
+                    error: None,
+                    duration_secs: elapsed,
+                };
+            }
+
+            // 5b. Save stdout capture as fallback response
+            let quality = validate_heuristic(&output);
+            let db_lock = db.lock().unwrap();
+            match db_lock.save_response(&round_id, &agent_name, &output) {
+                Ok(response) => {
+                    let _ = db_lock.update_response_quality(&response.id, &quality);
+                    let _ = db_lock.update_participant_status(
+                        &round_id,
+                        &agent_name,
+                        &ParticipantStatus::Responded,
+                        Some(&quality),
+                        None,
+                    );
+
+                    // Spawn Haiku validator for suspect responses
+                    if quality == ResponseQuality::Suspect {
+                        let quality_str = quality.to_string();
+                        drop(db_lock);
+                        crate::validator::spawn_validator(
+                            Arc::clone(&db),
+                            &config,
+                            response.id,
+                            agent_name.clone(),
+                            output,
+                        );
+                        return AgentDispatchResult {
+                            agent_name,
+                            success: true,
+                            quality: Some(quality_str),
+                            error: None,
+                            duration_secs: elapsed,
+                        };
+                    }
+
+                    AgentDispatchResult {
+                        agent_name,
+                        success: true,
+                        quality: Some(quality.to_string()),
+                        error: None,
+                        duration_secs: elapsed,
+                    }
+                }
+                Err(e) => {
+                    let _ = db_lock.update_participant_status(
+                        &round_id,
+                        &agent_name,
+                        &ParticipantStatus::Failed,
+                        None,
+                        Some(&e.to_string()),
+                    );
+                    AgentDispatchResult {
+                        agent_name,
+                        success: false,
+                        quality: None,
+                        error: Some(e.to_string()),
+                        duration_secs: elapsed,
+                    }
+                }
+            }
+        }
+        Err(e) => {
+            // 5c. Handle provider error
+            let status = if matches!(e, ProviderError::Timeout { .. }) {
+                ParticipantStatus::TimedOut
+            } else {
+                ParticipantStatus::Failed
+            };
+            {
+                let db_lock = db.lock().unwrap();
+                let _ = db_lock.update_participant_status(
+                    &round_id,
+                    &agent_name,
+                    &status,
+                    None,
+                    Some(&e.to_string()),
+                );
+            }
+            AgentDispatchResult {
+                agent_name,
+                success: false,
+                quality: None,
+                error: Some(e.to_string()),
+                duration_secs: elapsed,
+            }
         }
     }
 }

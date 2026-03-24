@@ -1592,6 +1592,43 @@ impl BrainstormDb {
         Ok(())
     }
 
+    pub fn get_participant(
+        &self,
+        round_id: &RoundId,
+        agent_name: &str,
+    ) -> Result<Option<RoundParticipant>, DbError> {
+        use rusqlite::OptionalExtension;
+        let result = self
+            .conn
+            .query_row(
+                "SELECT id, round_id, agent_name, phase, status, dispatched_at, responded_at, \
+                 response_quality, error_detail, retry_count, max_retries, \
+                 feedback_items_expected, feedback_items_completed, created_at \
+                 FROM round_participants WHERE round_id = ?1 AND agent_name = ?2",
+                params![round_id.as_str(), agent_name],
+                |row| Ok(Self::row_to_participant(row)),
+            )
+            .optional()
+            .db()?;
+        Ok(result)
+    }
+
+    pub fn increment_retry_count(
+        &self,
+        round_id: &RoundId,
+        agent_name: &str,
+    ) -> Result<(), DbError> {
+        self.conn
+            .execute(
+                "UPDATE round_participants SET retry_count = retry_count + 1, \
+                 status = 'pending', error_detail = NULL \
+                 WHERE round_id = ?1 AND agent_name = ?2",
+                params![round_id.as_str(), agent_name],
+            )
+            .db()?;
+        Ok(())
+    }
+
     pub fn get_round_participants(
         &self,
         round_id: &RoundId,
@@ -2257,5 +2294,47 @@ mod tests {
         db.update_response_quality(&response.id, &ResponseQuality::Suspect).unwrap();
         let fetched = db.get_response(&round.id, "test-agent").unwrap().unwrap();
         assert_eq!(fetched.quality, Some(ResponseQuality::Suspect));
+    }
+
+    #[test]
+    fn get_participant_returns_none_for_missing() {
+        let db = db();
+        let session = db.create_session("Test", None).unwrap();
+        let round = db.create_round(&session.id, None, None).unwrap();
+        assert!(db.get_participant(&round.id, "nonexistent").unwrap().is_none());
+    }
+
+    #[test]
+    fn get_participant_returns_registered() {
+        let db = db();
+        let session = db.create_session("Test", None).unwrap();
+        let round = db.create_round(&session.id, None, None).unwrap();
+        db.register_participant(&round.id, "agent-a", "analysis").unwrap();
+        let p = db.get_participant(&round.id, "agent-a").unwrap().unwrap();
+        assert_eq!(p.agent_name, "agent-a");
+        assert_eq!(p.status, ParticipantStatus::Pending);
+    }
+
+    #[test]
+    fn increment_retry_count_resets_status() {
+        let db = db();
+        let session = db.create_session("Retry test", None).unwrap();
+        let round = db.create_round(&session.id, None, None).unwrap();
+
+        let p = db.register_participant(&round.id, "agent-a", "analysis").unwrap();
+        assert_eq!(p.retry_count, 0);
+
+        // Mark as failed
+        db.update_participant_status(
+            &round.id, "agent-a", &ParticipantStatus::Failed, None, Some("timeout"),
+        ).unwrap();
+
+        // Increment retry
+        db.increment_retry_count(&round.id, "agent-a").unwrap();
+
+        let p = db.get_participant(&round.id, "agent-a").unwrap().unwrap();
+        assert_eq!(p.retry_count, 1);
+        assert_eq!(p.status, ParticipantStatus::Pending);
+        assert!(p.error_detail.is_none());
     }
 }

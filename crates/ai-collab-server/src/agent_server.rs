@@ -25,6 +25,28 @@ fn json_result<T: serde::Serialize>(val: &T) -> String {
 // Parameter structs
 // ---------------------------------------------------------------------------
 
+/// Empty params for tools that take no arguments.
+/// Custom JsonSchema impl ensures `"properties": {}` is present
+/// (OpenAI/Copilot rejects schemas without it).
+#[derive(Debug, Deserialize)]
+pub struct EmptyParams {}
+
+impl schemars::JsonSchema for EmptyParams {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "EmptyParams".into()
+    }
+    fn schema_id() -> std::borrow::Cow<'static, str> {
+        concat!(module_path!(), "::EmptyParams").into()
+    }
+    fn json_schema(_gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "object",
+            "properties": {},
+            "title": "EmptyParams"
+        })
+    }
+}
+
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct GetOnboardingParams {
     #[schemars(description = "Agent name")]
@@ -381,7 +403,7 @@ impl AgentServer {
     #[tool(description = "Get the workflow template defining the 3-phase brainstorm process")]
     fn bs_get_workflow(
         &self,
-        #[allow(unused_variables)] Parameters(_params): Parameters<()>,
+        #[allow(unused_variables)] Parameters(_params): Parameters<EmptyParams>,
     ) -> String {
         let db = self.db.lock().unwrap();
         match db.get_workflow_template("multi-ai-brainstorm") {
