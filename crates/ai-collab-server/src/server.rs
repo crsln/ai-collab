@@ -76,6 +76,15 @@ pub struct NewSessionParams {
     #[schemars(description = "Project name (optional)")]
     #[serde(default)]
     pub project: Option<String>,
+    #[schemars(
+        description = "Session complexity mode: 'quick' (1 round, no deliberation), 'standard' (2 phase, default), 'deep' (3 phase with extended deliberation)"
+    )]
+    #[serde(default = "default_session_mode")]
+    pub mode: String,
+}
+
+fn default_session_mode() -> String {
+    "standard".to_string()
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -142,6 +151,15 @@ pub struct RunRoundParams {
     )]
     #[serde(default)]
     pub agents: Option<String>,
+    #[schemars(
+        description = "Gate mode: 'strict' (all must succeed, default), 'quorum' (majority must succeed), 'best_effort' (any success = proceed)"
+    )]
+    #[serde(default = "default_gate_mode")]
+    pub gate_mode: String,
+}
+
+fn default_gate_mode() -> String {
+    "strict".to_string()
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -459,7 +477,11 @@ impl OrchestratorServer {
     #[tool(description = "Create a new brainstorming session")]
     fn bs_new_session(&self, Parameters(params): Parameters<NewSessionParams>) -> String {
         let db = self.db.lock().unwrap();
-        match db.create_session(&params.topic, params.project.as_deref()) {
+        match db.create_session_with_mode(
+            &params.topic,
+            params.project.as_deref(),
+            &params.mode,
+        ) {
             Ok(session) => json_result(&session),
             Err(e) => json_result(&serde_json::json!({"error": e.to_string()})),
         }
@@ -675,22 +697,34 @@ impl OrchestratorServer {
             }
         }
 
-        // 6. Compute gate status
+        // 6. Compute gate status based on gate_mode
         let total = results.len();
         let succeeded = results.iter().filter(|r| r.success).count();
         let failed = total - succeeded;
-        let all_done = succeeded == total;
+
+        let gate_passed = match params.gate_mode.as_str() {
+            "quorum" => succeeded > total / 2,    // majority must succeed
+            "best_effort" => succeeded > 0,        // any success = proceed
+            _ => succeeded == total,               // "strict" (default): all must succeed
+        };
 
         // 7. Build response
-        if all_done {
+        if gate_passed {
+            let status = if succeeded == total {
+                "complete"
+            } else {
+                "partial_success"
+            };
             let body = serde_json::to_string_pretty(&serde_json::json!({
-                "status": "complete",
+                "status": status,
                 "round_id": round.id.as_str(),
                 "round_number": round.round_number,
                 "session_id": params.session_id,
                 "total_agents": total,
                 "succeeded": succeeded,
+                "failed": failed,
                 "gate_passed": true,
+                "gate_mode": params.gate_mode,
                 "results": results,
             }))
             .unwrap_or_default();
@@ -707,6 +741,7 @@ impl OrchestratorServer {
                 "succeeded": succeeded,
                 "failed": failed,
                 "gate_passed": false,
+                "gate_mode": params.gate_mode,
                 "results": results,
                 "failed_agents": failed_agents,
                 "hint": "Use bs_retry_agent to retry failed agents, then bs_check_round_status to verify."
@@ -975,18 +1010,25 @@ impl OrchestratorServer {
             let accepts = responses.iter().filter(|r| r.verdict == "accept").count();
             let rejects = responses.iter().filter(|r| r.verdict == "reject").count();
             let modifies = responses.iter().filter(|r| r.verdict == "modify").count();
+            let abstains = responses.iter().filter(|r| r.verdict == "abstain").count();
 
-            let resolution = if accepts == total {
+            // Exclude abstain votes from effective total so "no opinion" doesn't
+            // inflate the denominator and block majorities.
+            let effective_total = total - abstains;
+
+            let resolution = if effective_total == 0 {
+                None // all abstained — contested
+            } else if accepts == effective_total {
                 Some(FeedbackStatus::Accepted)
-            } else if rejects == total {
+            } else if rejects == effective_total {
                 Some(FeedbackStatus::Rejected)
-            } else if modifies == total {
+            } else if modifies == effective_total {
                 Some(FeedbackStatus::Modified)
-            } else if accepts > total / 2 {
+            } else if accepts > effective_total / 2 {
                 Some(FeedbackStatus::Accepted)
-            } else if rejects > total / 2 {
+            } else if rejects > effective_total / 2 {
                 Some(FeedbackStatus::Rejected)
-            } else if modifies > total / 2 {
+            } else if modifies > effective_total / 2 {
                 Some(FeedbackStatus::Modified)
             } else {
                 None // contested — no majority
@@ -999,7 +1041,7 @@ impl OrchestratorServer {
                     "item_id": fid.as_str(),
                     "title": item.title,
                     "result": status.to_string(),
-                    "votes": {"accept": accepts, "reject": rejects, "total": total},
+                    "votes": {"accept": accepts, "reject": rejects, "modify": modifies, "abstain": abstains, "total": total, "effective_total": effective_total},
                 }));
             } else {
                 contested += 1;
@@ -1007,7 +1049,7 @@ impl OrchestratorServer {
                     "item_id": fid.as_str(),
                     "title": item.title,
                     "result": "contested",
-                    "votes": {"accept": accepts, "reject": rejects, "total": total},
+                    "votes": {"accept": accepts, "reject": rejects, "modify": modifies, "abstain": abstains, "total": total, "effective_total": effective_total},
                 }));
             }
         }
@@ -1017,6 +1059,70 @@ impl OrchestratorServer {
             "contested": contested,
             "total_pending": items.len(),
             "details": details,
+        }))
+    }
+
+    #[tool(
+        description = "Get contested feedback items with all conflicting verdicts pre-loaded. Use this to surface dissenting reasoning before follow-up deliberation rounds."
+    )]
+    fn bs_get_contested_items(
+        &self,
+        Parameters(params): Parameters<SessionIdParams>,
+    ) -> String {
+        let db = self.db.lock().unwrap();
+        let sid = SessionId::from(params.session_id.as_str());
+
+        // Get all pending (contested) feedback items
+        let items = match db.list_feedback_items(&sid, Some(&FeedbackStatus::Pending)) {
+            Ok(items) => items,
+            Err(e) => return json_result(&serde_json::json!({"error": e.to_string()})),
+        };
+
+        let mut contested = Vec::new();
+        for item in &items {
+            let responses = match db.get_feedback_responses(&item.id) {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+
+            if responses.is_empty() {
+                continue;
+            }
+
+            // Group verdicts
+            let verdicts: Vec<serde_json::Value> = responses
+                .iter()
+                .map(|r| {
+                    serde_json::json!({
+                        "agent": r.agent_name,
+                        "verdict": r.verdict,
+                        "reasoning": r.reasoning,
+                    })
+                })
+                .collect();
+
+            let accept_count = responses.iter().filter(|r| r.verdict == "accept").count();
+            let reject_count = responses.iter().filter(|r| r.verdict == "reject").count();
+            let modify_count = responses.iter().filter(|r| r.verdict == "modify").count();
+
+            contested.push(serde_json::json!({
+                "item_id": item.id.as_str(),
+                "title": item.title,
+                "content": item.content,
+                "source_agent": item.source_agent,
+                "vote_summary": {
+                    "accept": accept_count,
+                    "reject": reject_count,
+                    "modify": modify_count,
+                },
+                "verdicts": verdicts,
+            }));
+        }
+
+        json_result(&serde_json::json!({
+            "session_id": params.session_id,
+            "contested_count": contested.len(),
+            "items": contested,
         }))
     }
 
@@ -1046,6 +1152,24 @@ impl OrchestratorServer {
         &self,
         Parameters(params): Parameters<RespondToFeedbackParams>,
     ) -> String {
+        // Validate verdict is a known value
+        let valid_verdicts = ["accept", "reject", "modify", "abstain"];
+        if !valid_verdicts.contains(&params.verdict.as_str()) {
+            return json_result(&serde_json::json!({
+                "error": format!("Invalid verdict '{}'. Must be one of: accept, reject, modify, abstain", params.verdict)
+            }));
+        }
+
+        // Reasoning quality gate: minimum 50 chars to prevent rubber-stamp verdicts
+        if params.reasoning.trim().len() < 50 {
+            return json_result(&serde_json::json!({
+                "error": format!(
+                    "Reasoning too short ({} chars). Minimum 50 characters required to ensure substantive deliberation.",
+                    params.reasoning.trim().len()
+                )
+            }));
+        }
+
         let db = self.db.lock().unwrap();
         let fid = FeedbackId::from(params.item_id.as_str());
         let rid = RoundId::from(params.round_id.as_str());
@@ -1252,9 +1376,25 @@ impl OrchestratorServer {
                     t.tags.join(" ")
                 )
                 .to_lowercase();
-                let score: f64 = topic_words.iter().filter(|w| text.contains(**w)).count() as f64;
-                // Boost by usage_count (less used = more interesting for diversity)
-                let usage_penalty = (t.usage_count as f64) * 0.1;
+                let doc_words: Vec<&str> = text.split_whitespace().collect();
+                let doc_len = doc_words.len() as f64;
+
+                // TF-IDF-inspired scoring: weight by inverse document frequency within the text
+                let score: f64 = topic_words
+                    .iter()
+                    .map(|w| {
+                        // Term frequency: count occurrences, normalized by doc length
+                        let tf = doc_words.iter().filter(|dw| dw.contains(w)).count() as f64
+                            / doc_len.max(1.0);
+                        // Boost partial matches less than exact matches
+                        let exact_matches = doc_words.iter().filter(|dw| *dw == w).count() as f64;
+                        tf + exact_matches * 0.5
+                    })
+                    .sum();
+
+                // Logarithmic usage penalty: log2(usage_count + 1) * 0.5
+                // Much stronger diversity pressure than the old linear 0.1 * count
+                let usage_penalty = ((t.usage_count as f64) + 1.0).log2() * 0.5;
                 (score - usage_penalty, t)
             })
             .collect();
@@ -1483,30 +1623,59 @@ async fn dispatch_single_agent(
         );
     }
 
-    // 3. Build minimal bootstrap prompt (~150 chars)
+    // 3. Build enriched bootstrap prompt with topic + urgency hint
+    let session_topic = {
+        let db_lock = db.lock().unwrap();
+        db_lock
+            .get_session(&session_id)
+            .ok()
+            .flatten()
+            .map(|s| s.topic)
+            .unwrap_or_default()
+    };
     let prompt = format!(
-        "You are '{}'. Call bs_get_onboarding(agent_name=\"{}\", session_id=\"{}\", round_id=\"{}\") to get your task.",
+        "You are '{}'. Topic: \"{}\". Your FIRST and ONLY action: call bs_get_onboarding(agent_name=\"{}\", session_id=\"{}\", round_id=\"{}\") immediately. Do NOT explore files or do anything else before calling this tool.",
         agent_name,
+        session_topic,
         agent_name,
         session_id.as_str(),
         round_id.as_str(),
     );
 
-    // 4. Build provider and execute
-    let run_config = AgentRunConfig {
-        name: cfg.name.clone(),
-        command: cfg.command.clone(),
-        args: cfg.args.clone(),
-        model: if cfg.model.is_empty() {
-            None
-        } else {
-            Some(cfg.model.clone())
-        },
-        timeout: cfg.timeout,
-    };
+    // 4. Build provider and execute with auto-retry
+    let max_retries = cfg.max_auto_retries;
+    let mut attempt = 0u32;
+    let mut result;
 
-    let provider = get_provider(run_config);
-    let result = provider.execute(&prompt, cwd.as_deref()).await;
+    loop {
+        let run_config = AgentRunConfig {
+            name: cfg.name.clone(),
+            command: cfg.command.clone(),
+            args: cfg.args.clone(),
+            model: if cfg.model.is_empty() {
+                None
+            } else {
+                Some(cfg.model.clone())
+            },
+            timeout: cfg.timeout,
+        };
+
+        let provider = get_provider(run_config);
+        result = provider.execute(&prompt, cwd.as_deref()).await;
+
+        if result.is_ok() || attempt >= max_retries {
+            break;
+        }
+
+        // Log retry and apply exponential backoff (2^attempt seconds)
+        attempt += 1;
+        let backoff = std::time::Duration::from_secs(1u64 << attempt);
+        eprintln!(
+            "[auto-retry] Agent '{}' failed (attempt {}), retrying in {:?}...",
+            agent_name, attempt, backoff
+        );
+        tokio::time::sleep(backoff).await;
+    }
     let elapsed = start.elapsed().as_secs_f64();
 
     match result {

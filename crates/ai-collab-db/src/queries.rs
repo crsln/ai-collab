@@ -96,6 +96,11 @@ impl BrainstormDb {
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
             .db()?;
         conn.execute_batch(SCHEMA).db()?;
+        // Migration: add mode column for existing databases
+        let _ = conn.execute(
+            "ALTER TABLE sessions ADD COLUMN mode TEXT DEFAULT 'standard' CHECK(mode IN ('quick','standard','deep'))",
+            [],
+        );
         Ok(Self { conn })
     }
 
@@ -103,13 +108,30 @@ impl BrainstormDb {
     // Sessions
     // -----------------------------------------------------------------------
 
-    pub fn create_session(&self, topic: &str, project: Option<&str>) -> Result<Session, DbError> {
+    pub fn create_session(
+        &self,
+        topic: &str,
+        project: Option<&str>,
+    ) -> Result<Session, DbError> {
+        self.create_session_with_mode(topic, project, "standard")
+    }
+
+    pub fn create_session_with_mode(
+        &self,
+        topic: &str,
+        project: Option<&str>,
+        mode: &str,
+    ) -> Result<Session, DbError> {
         let id = SessionId::new();
         let now = now_rfc3339();
+        let mode = match mode {
+            "quick" | "standard" | "deep" => mode,
+            _ => "standard",
+        };
         self.conn
             .execute(
-                "INSERT INTO sessions (id, topic, project, created_at) VALUES (?1, ?2, ?3, ?4)",
-                params![id.as_str(), topic, project, now],
+                "INSERT INTO sessions (id, topic, project, mode, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![id.as_str(), topic, project, mode, now],
             )
             .db()?;
         Ok(Session {
@@ -118,6 +140,7 @@ impl BrainstormDb {
             project: project.map(String::from),
             context: None,
             status: SessionStatus::Active,
+            mode: mode.to_string(),
             created_at: parse_dt(&now),
         })
     }
@@ -125,7 +148,7 @@ impl BrainstormDb {
     pub fn get_session(&self, session_id: &SessionId) -> Result<Option<Session>, DbError> {
         let mut stmt = self
             .conn
-            .prepare("SELECT id, topic, project, context, status, created_at FROM sessions WHERE id = ?1").db()?;
+            .prepare("SELECT id, topic, project, context, status, COALESCE(mode, 'standard'), created_at FROM sessions WHERE id = ?1").db()?;
         let row = stmt
             .query_row(params![session_id.as_str()], |row| {
                 Ok(Session {
@@ -137,7 +160,8 @@ impl BrainstormDb {
                         .get::<_, String>(4)?
                         .parse()
                         .unwrap_or(SessionStatus::Active),
-                    created_at: parse_dt(&row.get::<_, String>(5)?),
+                    mode: row.get::<_, String>(5).unwrap_or_else(|_| "standard".to_string()),
+                    created_at: parse_dt(&row.get::<_, String>(6)?),
                 })
             })
             .optional()
@@ -155,7 +179,7 @@ impl BrainstormDb {
             let mut stmt = self
                 .conn
                 .prepare(
-                    "SELECT id, topic, project, context, status, created_at \
+                    "SELECT id, topic, project, context, status, COALESCE(mode, 'standard'), created_at \
                  FROM sessions WHERE status = ?1 ORDER BY created_at DESC LIMIT ?2",
                 )
                 .db()?;
@@ -170,7 +194,8 @@ impl BrainstormDb {
                             .get::<_, String>(4)?
                             .parse()
                             .unwrap_or(SessionStatus::Active),
-                        created_at: parse_dt(&row.get::<_, String>(5)?),
+                        mode: row.get::<_, String>(5).unwrap_or_else(|_| "standard".to_string()),
+                        created_at: parse_dt(&row.get::<_, String>(6)?),
                     })
                 })
                 .db()?;
@@ -181,7 +206,7 @@ impl BrainstormDb {
             let mut stmt = self
                 .conn
                 .prepare(
-                    "SELECT id, topic, project, context, status, created_at \
+                    "SELECT id, topic, project, context, status, COALESCE(mode, 'standard'), created_at \
                  FROM sessions ORDER BY created_at DESC LIMIT ?1",
                 )
                 .db()?;
@@ -196,7 +221,8 @@ impl BrainstormDb {
                             .get::<_, String>(4)?
                             .parse()
                             .unwrap_or(SessionStatus::Active),
-                        created_at: parse_dt(&row.get::<_, String>(5)?),
+                        mode: row.get::<_, String>(5).unwrap_or_else(|_| "standard".to_string()),
+                        created_at: parse_dt(&row.get::<_, String>(6)?),
                     })
                 })
                 .db()?;

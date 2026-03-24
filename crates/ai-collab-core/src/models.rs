@@ -15,6 +15,8 @@ pub struct Session {
     pub project: Option<String>,
     pub context: Option<String>,
     pub status: SessionStatus,
+    /// Session complexity mode: quick (1 round, no deliberation), standard (2 phase), deep (3 phase).
+    pub mode: String,
     pub created_at: DateTime<Utc>,
 }
 

@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     project TEXT,
     context TEXT,
     status TEXT DEFAULT 'active' CHECK(status IN ('active','completed','archived')),
+    mode TEXT DEFAULT 'standard' CHECK(mode IN ('quick','standard','deep')),
     created_at TEXT NOT NULL
 );
 

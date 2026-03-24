@@ -74,11 +74,13 @@ Agents are defined in `ai-collab.toml`:
 command = "copilot"
 args = ["-p", "{prompt}", "--allow-all"]
 display_name = "GitHub Copilot"
+max_auto_retries = 2  # Copilot is more timeout-prone
 
 [agents.gemini]
 command = "gemini"
 args = ["-p", "{prompt}", "--yolo"]
 display_name = "Google Gemini"
+# max_auto_retries defaults to 1
 ```
 
 Add any CLI-based AI tool as an agent. See `ai-collab.toml.example` for more examples.
@@ -114,9 +116,10 @@ feedback extraction, and convergence checking.
 
 | Tool | Purpose |
 |------|---------|
-| `bs_new_session(topic, project?)` | Start session |
+| `bs_new_session(topic, project?, mode?)` | Start session (mode: quick/standard/deep) |
 | `bs_set_context(session_id, context)` | Attach codebase context |
-| `bs_run_round(session_id, objective, question, cwd?)` | Run full round with all agents (FAIL-FAST) |
+| `bs_run_round(session_id, objective, question, cwd?, gate_mode?)` | Run round (gate_mode: strict/quorum/best_effort) |
+| `bs_get_contested_items(session_id)` | Get contested feedback with all dissenting verdicts |
 | `bs_check_round_status(round_id)` | Check round completion gate |
 | `bs_check_feedback_status(round_id, session_id)` | Check feedback vote completeness |
 | `bs_retry_agent(round_id, agent_name, cwd?)` | Retry a failed agent |
@@ -129,23 +132,38 @@ feedback extraction, and convergence checking.
 | `bs_apply_role(session_id, agent_name, slug)` | Apply role template to session |
 | `bs_update_role(slug, ...)` | Refine a role template |
 
-### Sync Barrier (FAIL-FAST)
+### Session Modes
 
-`bs_run_round` now registers participants and enforces completion gates:
-- All agents must respond with valid content before the round succeeds
-- If ANY agent fails, the round returns `[ROUND FAILED]` and flow STOPS
+`bs_new_session` accepts a `mode` parameter:
+- **`quick`**: Single round, no deliberation — for simple questions
+- **`standard`** (default): 2-phase (analysis + consolidation, or with deliberation if needed)
+- **`deep`**: Full 3-phase with extended deliberation — for complex architectural decisions
+
+### Sync Barrier & Gate Modes
+
+`bs_run_round` supports configurable gate modes via `gate_mode` parameter:
+- **`strict`** (default): All agents must succeed — if ANY fails, returns `[ROUND FAILED]`
+- **`quorum`**: Majority must succeed (2/3) — returns `partial_success` if some fail
+- **`best_effort`**: Any single success = proceed — maximum resilience
+
+Default remains `strict` for backward compatibility. Use `quorum` for production resilience.
 - Use `bs_retry_agent` to retry failed agents, then `bs_check_round_status` to verify
 - Phase 2 requires ALL agents to vote on ALL feedback items before consolidation
-- No graceful degradation — fix the problem, don't skip agents
+- Agents auto-retry once on transient failures (configurable via `max_auto_retries` in ai-collab.toml)
+
+### Verdict Quality Gates
+
+- Verdict reasoning must be at least 50 characters (prevents rubber-stamp "I agree" voting)
+- Verdict must be one of: `accept`, `reject`, `modify`, `abstain`
+- Abstain votes are excluded from the effective total in auto-resolve (abstain = truly "no opinion")
 
 ### Self-Describing DB (Pure ID-Based Prompts)
 
 Agent definitions, workflow templates, tool guides, and role templates are stored in the DB.
 Agents call `bs_get_onboarding(agent_name)` to discover everything they need.
 
-Agent dispatch prompts are **pure ID-based** (~150 chars): just the agent name, session/round IDs,
-and a bootstrap instruction to call `bs_get_onboarding()`. The question itself is stored in the
-`rounds` table and delivered to agents as part of the onboarding response (`task.question`).
+Agent dispatch prompts include the session topic + urgency hint + onboarding instruction.
+The question itself is stored in the `rounds` table and delivered via `bs_get_onboarding()`.
 
 Seed defaults: `ai-collab-server seed-defaults --db .data/brainstorm.db`
 
@@ -154,13 +172,16 @@ Seed defaults: `ai-collab-server seed-defaults --db .data/brainstorm.db`
 Reusable role templates live in the `role_library` table. All roles are globally assignable
 to ANY agent — roles are NOT fixed to specific models.
 
-**Role rotation pattern:** Each round, ALL agents get the SAME role. Rotate the role each
-round so every model covers every perspective. Model diversity on the same role produces
-different takes; role rotation ensures comprehensive coverage.
+**Hybrid role rotation pattern (recommended):** Round 1: each agent gets a DIFFERENT role
+(maximizes perspective diversity — 3 agents = 3 perspectives per round). Round 2: roles rotate
+for cross-validation. This yields up to 9 perspectives across 3 rounds.
 
-Use `bs_suggest_roles(topic)` to get a ranked list, then apply one role per round via
-`bs_apply_role(session_id, agent_name, slug)`. Templates track `usage_count` and
-`last_used_at` for optimization.
+**Same-role pattern (alternative):** Each round, ALL agents get the SAME role. Rotate the role
+each round. Model diversity on the same role produces different takes.
+
+Use `bs_suggest_roles(topic)` to get a ranked list (TF-IDF scoring with logarithmic usage
+penalty), then apply roles via `bs_apply_role(session_id, agent_name, slug)`.
+Templates track `usage_count` and `last_used_at` for optimization.
 
 ### Agent MCP Configuration
 

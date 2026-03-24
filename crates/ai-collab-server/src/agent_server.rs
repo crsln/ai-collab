@@ -226,12 +226,40 @@ impl AgentServer {
                 }
             }
 
+            // Check for pending feedback (deliberation context)
+            let pending_feedback = db
+                .list_feedback_items(&sid, Some(&FeedbackStatus::Pending))
+                .unwrap_or_default();
+
+            let deliberation_context = if !pending_feedback.is_empty() {
+                // Include pending feedback items and a reminder to cross-reference
+                let feedback_summary: Vec<serde_json::Value> = pending_feedback
+                    .iter()
+                    .map(|f| {
+                        serde_json::json!({
+                            "id": f.id.as_str(),
+                            "title": f.title,
+                            "source_agent": f.source_agent,
+                        })
+                    })
+                    .collect();
+                serde_json::json!({
+                    "is_deliberation": true,
+                    "pending_items": feedback_summary.len(),
+                    "items": feedback_summary,
+                    "instructions": "IMPORTANT: Before voting, you MUST call bs_get_round_responses to read other agents' analyses. Cross-reference their evidence in your reasoning. Reasoning must be at least 50 characters."
+                })
+            } else {
+                serde_json::json!(null)
+            };
+
             session_data = serde_json::json!({
                 "session": session,
                 "role": role,
                 "guidelines": guidelines,
                 "round_count": rounds.len(),
                 "latest_round": latest_round,
+                "deliberation": deliberation_context,
             });
         }
 
@@ -371,6 +399,24 @@ impl AgentServer {
         &self,
         Parameters(params): Parameters<RespondToFeedbackParams>,
     ) -> String {
+        // Validate verdict is a known value
+        let valid_verdicts = ["accept", "reject", "modify", "abstain"];
+        if !valid_verdicts.contains(&params.verdict.as_str()) {
+            return json_result(&serde_json::json!({
+                "error": format!("Invalid verdict '{}'. Must be one of: accept, reject, modify, abstain", params.verdict)
+            }));
+        }
+
+        // Reasoning quality gate: minimum 50 chars to prevent rubber-stamp verdicts
+        if params.reasoning.trim().len() < 50 {
+            return json_result(&serde_json::json!({
+                "error": format!(
+                    "Reasoning too short ({} chars). Minimum 50 characters required to ensure substantive deliberation.",
+                    params.reasoning.trim().len()
+                )
+            }));
+        }
+
         let db = self.db.lock().unwrap();
         let fid = FeedbackId::from(params.item_id.as_str());
         let rid = RoundId::from(params.round_id.as_str());

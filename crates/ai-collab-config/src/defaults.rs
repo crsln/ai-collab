@@ -24,6 +24,7 @@ pub fn builtin_agents() -> BTreeMap<String, AgentToml> {
             enabled: Some(true),
             display_name: Some("GitHub Copilot".into()),
             description: Some("Code analysis, shell commands, git operations, GitHub CLI".into()),
+            max_auto_retries: None,
         },
     );
 
@@ -45,6 +46,7 @@ pub fn builtin_agents() -> BTreeMap<String, AgentToml> {
             description: Some(
                 "Architecture analysis, research, alternative approaches, documentation".into(),
             ),
+            max_auto_retries: None,
         },
     );
 
@@ -65,6 +67,7 @@ pub fn builtin_agents() -> BTreeMap<String, AgentToml> {
             description: Some(
                 "Code generation, file editing, implementing specs from plans".into(),
             ),
+            max_auto_retries: None,
         },
     );
 

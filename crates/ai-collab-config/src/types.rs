@@ -57,6 +57,13 @@ pub struct AgentToml {
     pub display_name: Option<String>,
     #[serde(default)]
     pub description: Option<String>,
+    /// Max auto-retries on transient failure before reporting to orchestrator (default: 1).
+    #[serde(default = "default_max_auto_retries")]
+    pub max_auto_retries: Option<u32>,
+}
+
+fn default_max_auto_retries() -> Option<u32> {
+    Some(1)
 }
 
 fn default_args() -> Vec<String> {
@@ -78,6 +85,8 @@ pub struct AgentConfig {
     pub enabled: bool,
     pub display_name: String,
     pub description: String,
+    /// Max auto-retries on transient failure (0 = no auto-retry).
+    pub max_auto_retries: u32,
 }
 
 impl AgentConfig {
@@ -108,6 +117,7 @@ impl AgentConfig {
                 .clone()
                 .unwrap_or_else(|| capitalize(name)),
             description: toml.description.clone().unwrap_or_default(),
+            max_auto_retries: toml.max_auto_retries.unwrap_or(1),
         }
     }
 }
@@ -135,6 +145,7 @@ mod tests {
             enabled: true,
             display_name: "Test".into(),
             description: String::new(),
+            max_auto_retries: 1,
         };
         let args = config.build_args("hello world");
         assert_eq!(args, vec!["-p", "hello world", "--flag"]);
@@ -151,6 +162,7 @@ mod tests {
             enabled: true,
             display_name: "Test".into(),
             description: String::new(),
+            max_auto_retries: 1,
         };
         let args = config.build_args("hi");
         assert_eq!(args, vec!["-p", "hi", "--model", "gpt-4"]);
@@ -166,6 +178,7 @@ mod tests {
             enabled: None,
             display_name: None,
             description: None,
+            max_auto_retries: None,
         };
         let config = AgentConfig::from_toml("copilot", &toml, 900.0);
         assert_eq!(config.name, "copilot");
