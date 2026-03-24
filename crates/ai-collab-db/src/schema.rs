@@ -65,7 +65,7 @@ CREATE TABLE IF NOT EXISTS feedback_responses (
     item_id TEXT NOT NULL,
     round_id TEXT NOT NULL,
     agent_name TEXT NOT NULL,
-    verdict TEXT NOT NULL CHECK(verdict IN ('accept','reject','modify','abstain','agree','disagree','partial')),
+    verdict TEXT NOT NULL CHECK(verdict IN ('accept','reject','modify','abstain')),
     reasoning TEXT NOT NULL,
     created_at TEXT NOT NULL,
     FOREIGN KEY (item_id) REFERENCES feedback_items(id) ON DELETE CASCADE,

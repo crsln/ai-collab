@@ -1913,10 +1913,10 @@ mod tests {
 
         // Save feedback response
         let fr = db
-            .save_feedback_response(&item.id, &round2.id, "agent-b", "agree", "Looks good")
+            .save_feedback_response(&item.id, &round2.id, "agent-b", "accept", "Looks good")
             .unwrap();
         assert!(fr.id.as_str().starts_with("fbr_"));
-        assert_eq!(fr.verdict, "agree");
+        assert_eq!(fr.verdict, "accept");
 
         // Get feedback item with responses
         let (fi, responses) = db.get_feedback_item(&item.id).unwrap().unwrap();
@@ -2040,7 +2040,7 @@ mod tests {
             .create_feedback_item(&session.id, &round.id, "agent-a", "Title", "Content")
             .unwrap();
         let round2 = db.create_round(&session.id, None, None).unwrap();
-        db.save_feedback_response(&fb.id, &round2.id, "agent-b", "agree", "Reason")
+        db.save_feedback_response(&fb.id, &round2.id, "agent-b", "accept", "Reason")
             .unwrap();
 
         db.set_role(&session.id, "agent-a", "Architect", None)

@@ -224,7 +224,7 @@ pub struct RespondToFeedbackParams {
     pub round_id: String,
     #[schemars(description = "Agent name providing the verdict")]
     pub agent_name: String,
-    #[schemars(description = "Verdict: agree, disagree, partial, abstain")]
+    #[schemars(description = "Verdict: accept, reject, modify, abstain")]
     pub verdict: String,
     #[schemars(description = "Reasoning behind the verdict")]
     pub reasoning: String,
@@ -972,19 +972,24 @@ impl OrchestratorServer {
             }
 
             let total = responses.len();
-            let accepts = responses.iter().filter(|r| r.verdict == "accept" || r.verdict == "agree").count();
-            let rejects = responses.iter().filter(|r| r.verdict == "reject" || r.verdict == "disagree").count();
+            let accepts = responses.iter().filter(|r| r.verdict == "accept").count();
+            let rejects = responses.iter().filter(|r| r.verdict == "reject").count();
+            let modifies = responses.iter().filter(|r| r.verdict == "modify").count();
 
             let resolution = if accepts == total {
                 Some(FeedbackStatus::Accepted)
             } else if rejects == total {
                 Some(FeedbackStatus::Rejected)
+            } else if modifies == total {
+                Some(FeedbackStatus::Modified)
             } else if accepts > total / 2 {
                 Some(FeedbackStatus::Accepted)
             } else if rejects > total / 2 {
                 Some(FeedbackStatus::Rejected)
+            } else if modifies > total / 2 {
+                Some(FeedbackStatus::Modified)
             } else {
-                None // equal split — contested
+                None // contested — no majority
             };
 
             if let Some(status) = resolution {
